@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""微信进程管理：识别实例、启动新实例。
-
-微信 4.x 是多进程架构，一个实例会派生出多个同名 Weixin.exe（主进程没有
-`--type=`，子进程都有），所以只把主进程算作一个实例。
-"""
+"""微信进程管理：识别实例、启动新实例。"""
 from __future__ import annotations
 
 import ctypes
@@ -158,11 +154,7 @@ def _wx_rows() -> list:
 
 
 def _fallback_pids() -> set:
-    """最后兜底：按进程名取全部 pid（可能把子进程也算进来）。
-
-    不得再调用 `tasklist` —— 它是控制台程序，GUI 版调用时 Windows 会新建控制台
-    窗口，表现为每 2 秒闪一次黑窗。`_snapshot()` 已能列出全部进程，按名字过滤即可。
-    """
+    """兜底：按进程名取全部 pid（可能把子进程也算进来）。"""
     return {pid for pid, _ppid, name in _snapshot() if name in EXE_NAMES}
 
 
@@ -207,8 +199,7 @@ def start_time(pid: int) -> float:
 
 
 def main_pids_ordered() -> list:
-    """主进程按启动先后排序。槽位是 net/net_1/net_2... 顺序占用的，
-    所以第 i 个主进程就对应第 i 个槽位——退出指定账号时用它定位进程。"""
+    """主进程按启动先后排序（第 i 个主进程对应第 i 个槽位）。"""
     return sorted(_main_pids(), key=lambda p: start_time(p) or 0.0)
 
 
@@ -225,16 +216,7 @@ def pids() -> set:
 
 
 def _ensure_xweb_dll_path() -> str:
-    """把 XWeb 运行时目录补进 PATH，供微信整条进程树解析 xweb_elf.dll。
-
-    WeChatAppEx.exe 把 xweb_elf.dll 作为**静态导入**，而该 DLL 只存在于
-    `RadiumWMPF\\<版本>\\extracted\\runtime\\`，存根自己所在的目录里没有。加载器能
-    命中它的位置只有两条：当前工作目录（由微信自己设定，并不总是可靠）或 PATH。
-    环境变量会被子进程继承，所以在本进程改PATH = 给微信及其全部子孙兜底。
-
-    追加在**末尾**（优先级最低）：runtime\ 里还有 ffmpeg.dll / vulkan-1.dll 等同名
-    文件，放在前面反而可能顶掉别处本该加载的版本。幂等；未找到时返回空串。
-    """
+    """把 XWeb 运行时目录补进 PATH，供微信进程树解析 xweb_elf.dll。"""
     from . import paths
 
     rt = paths.xweb_runtime_dir()

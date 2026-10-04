@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""启动器：唯一被打包进 EXE 的代码。
-
-职责：定位程序根目录与外置代码区 `release\\`，做完整性自检；加载业务代码并转交 `main()`。
-"""
+"""启动器：唯一被打包进 EXE 的代码。定位程序根目录与外置代码区，做完整性自检后加载业务代码并转交 main()。"""
 from __future__ import annotations
 
 import os
@@ -66,12 +63,7 @@ def missing_parts() -> list:
 
 
 def load_app(tag: str):
-    """从外置的 app.py 加载模块。
-
-    用 importlib 按**文件路径**加载，而不是 `import app` —— 既不污染顶层
-    命名空间，也避免与其它同名模块冲突。`__file__` 此时指向真实的
-    release\\app.py，业务侧据此推出的路径全部正确。
-    """
+    """从外置的 app.py 加载模块（按文件路径加载，不污染顶层命名空间）。"""
     import importlib.util
 
     name = "wxprof_ui_" + tag

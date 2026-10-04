@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""实时监控：发现微信登录成功即采集 / 更新登录态。
-
-轮询三路信号（默认 2 秒一轮；纯轮询，不依赖文件系统事件，兼容 Windows 7）：
-    1. 槽位占用 —— <槽位>\\config.ini 的独占句柄（只读判据）
-    2. 槽位账号 —— kvcomm\\monitordata_<uin>（登录成功后才写）
-    3. live global_config —— 当前配置归属谁、票据是否还在
-"""
+"""实时监控：发现微信登录成功即采集 / 更新登录态。"""
 from __future__ import annotations
 
 import threading

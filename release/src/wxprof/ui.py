@@ -1,16 +1,5 @@
 # -*- coding: utf-8 -*-
-"""微信登录窗口的 UI 自动化（全程后台，不碰真实鼠标键盘）。
-
-微信 4.x 启动后停在登录窗口（UIA 类名 mmui::LoginWindow），点「进入微信」才真正登录。
-本模块三件事：
-
-    1. 等登录窗口出现，读出登录页状态（一键登录 / 二维码页 / 加载中）
-    2. 向按钮自身的窗口句柄投递鼠标消息点击（不用屏幕坐标、不移动光标）
-    3. 判定是否真的进了主界面（mmui::MainWindow 出现）
-
-依赖 uiautomation（已随 release\\ext\\ 分发）；导入失败时 available() 返回 False，
-调用方应显式报错而不是静默降级。
-"""
+"""微信登录窗口的 UI 自动化（全程后台，不碰真实鼠标键盘）。"""
 from __future__ import annotations
 
 import contextlib
@@ -24,10 +13,7 @@ _IMPORT_ERR = ""
 
 
 def _ensure() -> bool:
-    """确保 `uiautomation` 已导入（幂等，线程安全由 import 锁保证）。
-
-    返回是否可用；第一次调用承担那 0.56 s，之后都是读标志。
-    """
+    """确保 uiautomation 已导入（幂等）。返回是否可用。"""
     global auto, _OK, _IMPORT_ERR
     if _OK is not None:
         return _OK
@@ -140,10 +126,7 @@ def available() -> bool:
 
 
 def grab(path: str, ctrl=None) -> str:
-    """把控件（默认整个屏幕）截图存成 PNG，返回绝对路径；失败返回空串。
-
-    用来在出了问题时有据可查 —— **判断"微信停在哪一屏"不能只靠 UI 文本**。
-    """
+    """把控件（默认整个屏幕）截图存成 PNG，返回绝对路径；失败返回空串。"""
     if not _ensure():
         return ""
     try:
@@ -174,7 +157,7 @@ _WX_PIDS_TTL = 0.3              # pid 集合缓存时长
 
 
 def _top_windows() -> list:
-    """[(hwnd, pid, 是否可见)] —— 纯 Win32 `EnumWindows`（实测 3~8 ms / 260 窗口）。"""
+    """[(hwnd, pid, 是否可见)] —— 纯 Win32 EnumWindows。"""
     out = []
 
     def cb(h, _l):
@@ -191,12 +174,7 @@ def _top_windows() -> list:
 
 
 def _wx_pids():
-    """**全部**微信进程 pid（含子进程）：按进程名过滤，**不读命令行**。
-
-    不读命令行是有意的 —— 读 PEB 取 CommandLine 每个进程都要 OpenProcess + 读内存，
-    十几个子进程就是十几毫秒；而这里只要回答"这个窗口是不是微信的"，进程名足够
-    （实测 9 ms/次）。带上 0.3 s 缓存，热路径上几乎不花时间。
-    """
+    """全部微信进程 pid（含子进程）：按进程名过滤，不读命令行。"""
     now = time.time()
     if now - _WX_PIDS[0] < _WX_PIDS_TTL:
         return _WX_PIDS[1]
@@ -239,7 +217,7 @@ def _control_of(hwnd: int):
 
 
 def _legacy_windows(cls: str, pid: int = 0) -> list:
-    """老做法：整树枚举桌面的直接子控件。**慢（456~547 ms）**，只作兜底。"""
+    """老做法：整树枚举桌面的直接子控件，只作兜底。"""
     if not _ensure():
         return []
     try:
@@ -260,11 +238,7 @@ def _legacy_windows(cls: str, pid: int = 0) -> list:
 
 
 def _windows_of_class(cls: str, pid: int = 0) -> list:
-    """全部「此类窗口」的 UIA 控件；给了 pid 就只取该进程的。
-
-    走快路径；只有在"快路径整条都不可用"（枚举不到 / 拿不到微信 pid 集合 /
-    候选窗口全都读不出 UIA）时才退回老做法 —— 免得把探测能力弄丢。
-    """
+    """全部此类窗口的 UIA 控件；给了 pid 就只取该进程的。"""
     if not _ensure():
         return []
     if not _FAST_WND:
@@ -316,11 +290,7 @@ def login_windows() -> list:
 
 
 def login_window_of(pid: int):
-    """取某个进程自己的登录窗口。
-
-    多开时 `find_login_window()` 可能返回**别的实例**的窗口，用它点「进入微信」
-    会点错对象 —— 所以按 pid 精确取（顺带更快：不用查微信 pid 集合）。
-    """
+    """取某个进程自己的登录窗口。"""
     ws = _windows_of_class(LOGIN_CLASS, pid)
     return ws[0] if ws else None
 
@@ -379,11 +349,7 @@ QR_WORDS = ("二维码", "扫码登录", "扫描二维码", "二维码登录", "
 
 
 def _iter_controls(root, max_depth: int = 14, max_nodes: int = 0):
-    """深度优先遍历控件（返回 (控件, 深度)）。
-
-    max_nodes > 0 时限制访问节点数 —— 控件树是跨进程 COM 查询，是整个流程里
-    最贵的操作；状态判定只关心少数几个控件，没必要走完整棵树。
-    """
+    """深度优先遍历控件（返回 (控件, 深度)）；max_nodes > 0 时限制访问节点数。"""
     stack = [(root, 0)]
     n = 0
     while stack:
@@ -403,14 +369,7 @@ def _iter_controls(root, max_depth: int = 14, max_nodes: int = 0):
 
 
 def qr_evidence(win) -> str:
-    """二维码页的**正向证据**（空串 = 没有证据）。
-
-    为什么不能用"「进入微信」按钮没了"当判据：实测点击成功后按钮也会先消失，
-    而登录窗口要再过一会儿才销毁 —— 用"按钮没了"判断会把**正在进主界面**误判成
-    **被拒**，然后程序自己打断一次成功的登录。所以这里只认正向证据：
-        a) 控件名里出现"二维码/扫码登录"等字样
-        b) 有「切换账号」但没有「进入微信」（二维码页的固定布局）
-    """
+    """二维码页的正向证据（空串 = 没有证据）。"""
     if win is None:
         return ""
     names = []
@@ -452,11 +411,7 @@ STATE_CN = {
 
 
 def login_state(win) -> tuple:
-    """**一次遍历**判出登录页状态，返回 (状态, 昵称, 证据说明)。
-
-    分别调用 login_user / has_button / qr_evidence 等于把控件树（跨进程 COM
-    查询，最贵）走三遍；而登录页本来就是一眼可判的三态，没必要反复读。
-    """
+    """一次遍历判出登录页状态，返回 (状态, 昵称, 证据说明)。"""
     if win is None:
         return ST_GONE, "", "窗口不存在"
     names = []
@@ -520,18 +475,7 @@ class _POINT(ctypes.Structure):
 
 
 def click(win, name: str, method: str = "mouse-btn") -> bool:
-    """用指定方式点击窗口上的按钮。只返回"消息是否发出"，**不代表已生效**。
-
-    method 取值见 `CLICK_METHODS`（旧名 `"mouse"` / `"key"` 仍兼容）：
-
-        key-win    焦点给**窗口** → 投回车   （实测最快 62~92 ms，且不依赖按钮坐标）
-        mouse-btn  鼠标三连 → **按钮**句柄   （客户区坐标；实测 110~147 ms）
-        key-btn    焦点给**按钮** → 投空格   （实测 99~125 ms）
-        mouse-win  鼠标三连 → **窗口**句柄   （实测 149~173 ms）
-
-    四种方式都**只把消息投给目标句柄**，窗口在后台、被遮挡、无焦点都不影响
-    （已实测：置顶窗口盖住按钮仍有效）。全程**不动真实鼠标键盘**。
-    """
+    """用指定方式点击窗口上的按钮。只返回消息是否发出，不代表已生效。"""
     method = CLICK_ALIAS.get(method, method)
     btn = _find_button(win, name)
     if btn is None:
@@ -584,27 +528,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
                 grace: float = 60.0, poll: float = 0.15,
                 pid: int = 0, ready: float = 0.0) -> tuple:
     """点「进入微信」并判定结果。返回 (是否进入主界面, 方式)。
-
-    设计目标：**「进入微信」一出现就点**，不额外等"稳定"。两个阶段：
-
-      `ready > 0`  阶段一：按 `poll` 粒度轮询「进入微信」按钮，**出现即进入阶段二**
-                   （最多等 ready 秒；期间若先出现二维码正向证据 ⇒ 判被拒）。
-      `wait`       阶段二：**级联点击** + 确认的总时长。按 `CLICK_METHODS` 一招一招
-                   来；某一招发出去后 `CLICK_RETRY` 秒内没动静 ⇒ **换下一招**（不同
-                   通路，比同招重发有信息量）；走满一遍仍无反应 ⇒ 只等不点。
-
-    判据只有两条，且都必须有**正向证据**：
-
-        成功：**本 `pid` 实例**的主界面窗口（mmui::MainWindow）出现
-        被拒：登录窗口出现二维码页的正向证据（qr_evidence），且稳定 QR_STABLE 秒
-
-    `pid` 是本次新启动实例的进程号。**传了它就必须按它判**（见 appeared()）。
-    **绝不能**用"「进入微信」按钮消失了"当失败判据（见 qr_evidence 说明）。
-
-    第二个返回值的含义：
-        "qr" —— 有正向证据，确实被服务端拒了（调用方据此判定登录态失效）
-        ""   —— **没确认**（超时或窗口消失），含义是"不知道"，调用方不得据此
-                判定失效、更不得结束实例
+    方式 "qr" = 确实被拒；"" = 没确认，调用方不得据此判定失效。
     """
     def appeared() -> bool:
         """本次实例的主界面是否已出现。
@@ -614,11 +538,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         return len(main_windows()) > base_main      # 老调用方（未传 pid）的兜底
 
     def qr_stable(since: list, next_at: list) -> bool:
-        """二维码正向证据是否已**连续稳定** QR_STABLE 秒（限频检查）。
-
-        为什么限频：`qr_evidence` 要遍历控件树（实测 ~50 ms），而"按钮在不在"
-        只要 `FindControl` 命中即返回（~16 ms）—— 热路径上不能每轮都付这个钱。
-        """
+        """二维码正向证据是否已连续稳定 QR_STABLE 秒（限频检查）。"""
         now = time.time()
         if now < next_at[0]:
             return False
@@ -748,10 +668,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
 
 
 def main_windows() -> list:
-    """微信主界面窗口（mmui::MainWindow）列表。
-
-    这是"真的登录进去了"的可靠判据 —— 登录窗口消失也可能是被关掉了。
-    """
+    """微信主界面窗口列表。"""
     return _windows_of_class(MAIN_CLASS)
 
 
@@ -766,14 +683,7 @@ def main_window_of(pid: int):
 
 
 def hide_main_window(win, log=print) -> int:
-    """把主界面窗口**隐藏**起来（进程、登录态、窗口内容全部保留）。
-
-    这是多开的必要前置动作：已有实例的主窗口**可见**时，再启动微信会被"转交"给
-    那个实例（不产生独立进程）；主窗口**不可见**时才会真正新建实例。
-
-    **返回被隐藏的窗口句柄**（0 表示没成功），调用方拿到它就能用 `show_window`
-    原样显示回来 —— 隐藏只是"让它暂时不可见"，不是让用户丢掉窗口。
-    """
+    """把主界面窗口隐藏起来（进程与登录态全部保留），返回被隐藏的窗口句柄。"""
     if win is None:
         return 0
     hwnd = _native_handle(win)
@@ -791,15 +701,7 @@ def hide_main_window(win, log=print) -> int:
 
 
 def close_window(hwnd: int, log=print) -> bool:
-    """（**兜底专用**）对窗口补发 `WM_CLOSE` —— 走微信自己的"关闭到托盘"逻辑。
-
-    只在"直接隐藏不足以让微信新建实例（新实例被转交）"时才用。注意它会让微信
-    置上那个内部隐藏标记，窗口恢复后可能需要用户手动点一下标题栏最小化/最大化
-    （见 `hide_main_window` 说明）—— 所以它是**退路**，不是常用路径。
-
-    调用前应先把窗口 `show_window` 出来：微信对**已隐藏**的窗口常常直接忽略
-    `WM_CLOSE`（实测：对一个已处于异常隐藏态的窗口发 WM_CLOSE，窗口纹丝不动）。
-    """
+    """（兜底专用）对窗口补发 WM_CLOSE，走微信自己的关闭到托盘逻辑。"""
     if not hwnd:
         return False
     h = int(hwnd)
@@ -814,12 +716,7 @@ def close_window(hwnd: int, log=print) -> bool:
 
 
 def show_window(hwnd: int, log=print) -> bool:
-    """把 `hide_main_window` 隐藏的主窗口**原样显示回来**。
-
-    窗口只是被隐藏，**句柄依然有效**，位置/大小/内容全部保留，显示回来即可，
-    **不影响账号在线状态**。若用户自己已从托盘点开了窗口、或已退出该账号，
-    这里会安全地什么都不做。收起方式既然是 `SW_HIDE`，恢复就只需 `SW_SHOW`。
-    """
+    """把隐藏的主窗口原样显示回来。"""
     if not hwnd:
         return False
     h = int(hwnd)

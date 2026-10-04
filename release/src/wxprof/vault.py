@@ -1,14 +1,5 @@
 # -*- coding: utf-8 -*-
-"""账号档案库：一个账号一份登录态（aid = wxid）。
-
-    data/<wxid>/
-        meta.json              账号元信息（uin / 昵称 / 指纹等）
-        avatar.png             头像（tkinter 可直接显示）
-        cfg/global_config      登录态：全局配置对（免扫码票据所在）
-        cfg/global_config.crc
-        host/...               登录态：账号级网络路由文件
-
-"""
+"""账号档案库：一个账号一份登录态（aid = wxid）。"""
 from __future__ import annotations
 
 import hashlib
@@ -23,12 +14,7 @@ CONFIG_FILES = ("global_config", "global_config.crc")
 
 
 def _stable_read(path: str, tries: int = 4, gap: float = 0.5) -> bytes:
-    """稳定读取：连读两次内容一致才认。
-
-    MMKV 是**内存映射**文件，微信就地写、没有原子性；此刻拷走可能拿到"改到一半"
-    的内容 —— 解出来看着正常、实际与服务端对不上，点「进入微信」就被拒。
-    关键文件一律用这个函数取。
-    """
+    """稳定读取：连读两次内容一致才认。"""
     prev = None
     for _ in range(max(tries, 2)):
         try:
@@ -199,11 +185,7 @@ class Vault:
         return slot.fp_digest(self.host_fingerprint(wxid))
 
     def save_config(self, wxid: str, src_dir: str, expect_wxid: str = "") -> tuple:
-        """把活配置对（src_dir 下的 global_config(+.crc)）存进档案。
-
-        返回 (是否保存, 错误)。**先校验归属**：解不出 wxid 或与期望不一致就拒绝
-        落盘 —— 直接覆盖会把一份好档案换成废档案/别人的档案，下次登录反而要扫码。
-        """
+        """把活配置对存进档案。返回 (是否保存, 错误)。"""
         if not src_dir:
             return False, "无配置目录"
         src = {fn: os.path.join(src_dir, fn) for fn in CONFIG_FILES}
@@ -232,10 +214,7 @@ class Vault:
         return True, ""
 
     def save_host(self, wxid: str, src_host: str) -> int:
-        """把槽位的 host 目录镜像进档案（src_host 即槽位的 `<槽位>\\host\\`）。
-
-        覆盖式镜像（先清空档案里的 host/ 再整目录复制），避免残留旧账号文件。
-        """
+        """把槽位的 host 目录镜像进档案。"""
         from . import slot
         return slot.mirror_host(src_host, self.host_dir(wxid))
 

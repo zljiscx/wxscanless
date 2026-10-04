@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""账号头像：下载并转成 tkinter 可显示的 PNG。
-
-头像地址取自 global_config 的 `mmkv_key_head_img_url`
-（形如 http://wx.qlogo.cn/mmhead/ver_1/<hash>/132）。
-"""
+"""账号头像：下载并转成 tkinter 可显示的 PNG。"""
 from __future__ import annotations
 
 import ctypes
@@ -126,12 +122,7 @@ _PIXEL_FORMAT_32BPP_ARGB = 0x26200A
 
 
 def scale_to_png(src: str, dst: str, size: int) -> bool:
-    """用 GDI+ 把 src 高质量缩放到 size×size 的 PNG 写到 dst。
-
-    为什么不在界面里缩：tk 的 `PhotoImage` 只有整数倍 `subsample()`，
-    132→88 这类非整数倍根本没法做，硬放就会"只露一角"。所以**落盘即目标尺寸**，
-    界面 1:1 绘制 —— 既完整又清晰。
-    """
+    """用 GDI+ 把 src 高质量缩放到 size×size 的 PNG 写到 dst。"""
     if size <= 0:
         return jpeg_to_png(src, dst)
     token = ctypes.c_void_p()

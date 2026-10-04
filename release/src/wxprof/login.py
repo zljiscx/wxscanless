@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""登录：把已收录的账号免扫码登进主界面。
-
-流程：占用最小空闲槽位 → 收起已有实例主窗口 → 热替换 config 对 → 铺 host 到目标槽位
-→ 启动实例 → 后台点「进入微信」→ 后台判定是否进入主界面。
-"""
+"""登录：把已收录的账号免扫码登进主界面。"""
 from __future__ import annotations
 
 import os
@@ -32,12 +28,7 @@ def _remove_quiet(path: str) -> bool:
 
 
 def sweep_backups(env) -> int:
-    """清掉 config 目录里遗留的 `*.livebak`（尽力而为，返回清掉的个数）。
-
-    为什么需要：`clean_temp()` 只在"实例全部退出"时被调用；若用户自己从托盘
-    退出微信，`clean_temp` 可能永远不执行，`.livebak` 就永久留着。它不影响
-    微信，但会让下一次热替换"让位"失败 ⇒ 最好每次装载前顺手扫一遍。
-    """
+    """清掉 config 目录里遗留的 *.livebak（尽力而为，返回清掉的个数）。"""
     if not env.config_dir:
         return 0
     try:
@@ -53,13 +44,7 @@ def sweep_backups(env) -> int:
 
 
 def install_config_pair(env, src_dir: str, log=print) -> int:
-    """把 src_dir 里的 `global_config` **一对**装到 live —— 成对、可回滚。
-
-    两条硬规则（踩过坑）：
-      · 源缺任一文件 → 整体放弃，绝不做半套（半套会让微信读不出登录态，
-        表现就是"明明有档案却每次都要扫码"）；
-      · 逐个写入，任一失败 → 回滚已写入的那个。
-    """
+    """把 src_dir 里的 global_config 一对装到 live，成对且可回滚。"""
     src = {}
     for fn in CONFIG_FILES:
         p = os.path.join(src_dir, fn)
@@ -114,12 +99,7 @@ def clean_temp(env) -> None:
 
 
 def _entered(env, pid: int, acc, target_slot: str) -> bool:
-    """是否真的进了主界面（两条独立证据，任一成立）。
-
-    判据一律围绕**本实例的 pid**，**不能**用「主窗口总数 > base_main」：登录过程中
-    会把旧实例的窗口显示回来（`restore_windows`），总数判据会把那些"复活"的窗口
-    当成本次登录的成果（实测的假成功就是这么来的）。
-    """
+    """是否真的进了主界面（判据围绕本实例的 pid）。"""
     try:
         if ui.main_window_of(pid) is not None:
             return True                         # 本实例的主界面窗口出现
@@ -149,14 +129,7 @@ def wait_entered(env, pid: int, acc, target_slot: str,
 
 
 def _hide_existing(log) -> list:
-    """隐藏所有**可见**的已登录实例主窗口，返回被隐藏的窗口句柄列表。
-
-    为什么非收不可：微信的"单实例转交"——已有实例的主窗口**可见**时，再启动
-    微信会被转交给它而不产生新进程，多开就无从谈起。
-
-    收起方式用 `SW_HIDE` 而非 `WM_CLOSE`（后者会让微信置内部隐藏标记，恢复后
-    "点不动"），详见 `ui.hide_main_window` 的说明。
-    """
+    """隐藏所有可见的已登录实例主窗口，返回被隐藏的窗口句柄列表。"""
     out = []
     for p in process.main_pids_ordered():
         try:
@@ -187,10 +160,7 @@ def restore_windows(hidden: list, log=print) -> int:
 def login_account(env, vault, acc, log=print, hide_existing: bool = True,
                   hidden: list = None) -> dict:
     """免扫码登录一个已收录账号。返回 {ok, stage, detail, pid, slot, state}。
-
-    `hidden`：可选列表，用来**接收**本次被收进托盘的窗口句柄。流程正常时本函数
-    会自己把它们显示回来；若中途早退（如启动失败），调用方应对该列表再调一次
-    `restore_windows` 兜底 —— 别把用户已登录的窗口留在托盘里。
+    hidden 用来接收本次被收进托盘的窗口句柄，流程早退时由调用方恢复。
     """
     hidden = hidden if hidden is not None else []
     res = {"ok": False, "stage": "", "detail": "", "pid": 0,

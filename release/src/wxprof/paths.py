@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""微信运行环境探测。
-
-微信 4.x 相对 3.x 有多处改名，这里两套命名都做兼容探测：
-    3.x: WeChat.exe / Tencent\\WeChat / WeChat Files / All Users
-    4.x: Weixin.exe / Tencent\\xwechat / xwechat_files / all_users
-"""
+"""微信运行环境探测（兼容 3.x 与 4.x 的命名差异）。"""
 from __future__ import annotations
 
 import os
@@ -251,11 +246,7 @@ _XWEB_DLL = "xweb_elf.dll"
 
 
 def xweb_runtime_dir(appdata_dir: str = "") -> str:
-    """微信 XWeb 宿主的运行时目录（含 xweb_elf.dll 的那一个）；找不到返回空串。
-
-    约定位置为 `...\\xplugin\\plugins\\RadiumWMPF\\<版本号>\\extracted\\runtime`。
-    可能有多个版本并存，取**版本号最大**且确实含 xweb_elf.dll 的那个。
-    """
+    """微信 XWeb 宿主的运行时目录（含 xweb_elf.dll 的那一个）；找不到返回空串。"""
     root = appdata_dir or _find_appdata_dir()
     if not root:
         return ""

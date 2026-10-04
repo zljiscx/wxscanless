@@ -1,16 +1,5 @@
 # -*- coding: utf-8 -*-
-"""图形界面（tkinter，Windows 7/10/11）。
-
-窗口形态：窄长竖条，宽 360 固定不可拉伸，窗口内任意位置可拖动，贴屏幕右边缘自动隐藏。
-
-启动时序：窗口先显示（状态行"正在加载运行环境…（此过程不能登录账号）"、按钮置灰），
-UIA 自检 / 环境探测 / 启动监控在后台线程完成，就绪后状态行变"已就绪"并恢复按钮。
-
-账号卡片：登录 / 删除两个操作，另有全局「一键登录」。头像在线彩色 / 离线灰度，
-昵称在线绿加粗 / 离线灰常规；卡片高度固定，账号多时为列表加滚动条并支持滚轮。
-
-本文件属于外置代码区 `release\\`，更新功能只需替换本目录，无需重新打包 EXE。
-"""
+"""图形界面（tkinter）。窄长竖条窗口，可拖动、贴屏幕右边缘自动隐藏；账号卡片支持登录与删除。"""
 from __future__ import annotations
 
 import math
@@ -33,11 +22,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 
 def log_line(text: str) -> None:
-    """统一日志落盘：logs\\wechat_launcher.log。
-
-    --noconsole 打包后没有控制台，这个文件是唯一的排错入口；目录按需创建
-    （logs\\ 可随手整个删掉，下次运行会自动重建）。
-    """
+    """统一日志落盘：logs\wechat_launcher.log。"""
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         n = time.time()
@@ -195,11 +180,7 @@ _SHOW_EVENT_HANDLE = None   # 已有实例用它接收显示窗口信号
 
 
 def _init_win32():
-    """按需加载 kernel32 并**声明函数签名**。
-
-    不声明 argtypes/restype 时 ctypes 按 C int 传参，**64 位下句柄会被截断**，
-    API 静默失败（本项目在进程枚举上踩过这个坑）。
-    """
+    """按需加载 kernel32 并声明函数签名。"""
     global _K32
     if _K32 is None:
         import ctypes
@@ -218,11 +199,7 @@ def _init_win32():
 
 
 def _claim_single_instance() -> bool:
-    """单实例闸门。True = 可以启动；False = 已有实例在跑，本进程应当退出。
-
-    **任何异常都放行**（返回 True）—— 单实例是体验优化，不该在异常环境下
-    把程序彻底锁死到打不开。
-    """
+    """单实例闸门。True = 可以启动；False = 已有实例在跑，本进程应当退出。"""
     global _MUTEX_HANDLE, _SHOW_EVENT_HANDLE
     try:
         import ctypes
@@ -262,18 +239,7 @@ def color_of(wxid: str) -> str:
 
 
 class ThinScrollbar(tk.Canvas):
-    """宽度可自定义的细滚动条（自绘）。
-
-    为什么不用现成的：
-      · `ttk.Scrollbar` 的宽度只能从 style 设，而 Windows 默认主题（vista）
-        **完全忽略** `width` —— 实测无论设 6/8/12，请求宽度恒为 17px；
-      · 经典 `tk.Scrollbar` 带上下箭头，宽度做不小。
-    本窗口要一条 6px 的窄条，于是用一个 Canvas 自绘：
-      · 轨道与列表背景同色 ⇒ 视觉上只剩一截灰色滑块，干净；
-      · 支持拖动滑块、点击轨道跳转、鼠标悬停变深；
-      · 接口与 tk.Scrollbar 一致：`command=目标.yview`，
-        目标控件配 `yscrollcommand=本.set`。
-    """
+    """宽度可自定义的细滚动条（自绘）。"""
 
     W = SCROLLBAR_W                 # 宽度（用户指定 6px）
     MIN_THUMB = 24                  # 滑块最小高度，太短不好抓
@@ -447,12 +413,7 @@ class App(tk.Tk):
             log_line("首轮状态刷新失败：%r" % (e,))
 
     def _set_icon(self) -> None:
-        """设置窗口标题栏与任务栏图标。
-
-        tkinter 窗口**不会**自动继承 exe 的资源图标，必须显式指定。
-        图标与 EXE 的那张同源（`release\\assets\\icon.ico`，随外置代码一起走，
-        所以"只替换 release\\"的迭代方式不会把图标弄丢）；缺失时静默跳过。
-        """
+        """设置窗口标题栏与任务栏图标。"""
         ico = os.path.join(RELEASE_DIR, "assets", "icon.ico")
         if not os.path.isfile(ico):
             return
@@ -583,11 +544,7 @@ class App(tk.Tk):
         self._update_status()
 
     def _avatar_image(self, acc, gray: bool = False):
-        """加载头像 PNG（文件已按 DISPLAY_SIZE 落盘，这里 1:1 使用）。
-
-        `gray=True` 用于**离线账号**：优先读灰度副本，没有就现场生成一份
-        （生成一次即落盘、长期复用；生成失败也只试一次，不会每轮重试）。
-        """
+        """加载头像 PNG；gray=True 用于离线账号（优先读灰度副本）。"""
         p = self.vault.avatar_path(acc.wxid)
         if gray:
             gp = self.vault.avatar_gray_path(acc.wxid)
@@ -623,11 +580,7 @@ class App(tk.Tk):
         return img
 
     def _paint_avatar(self, cv: tk.Canvas, acc, online: bool) -> None:
-        """按在线状态把头像画到画布上：**在线彩色、离线灰**。
-
-        之前只靠状态文字区分在线/离线，字小、扫一眼看不出来；头像置灰后
-        整列卡片一眼就能分出哪些账号没在跑。
-        """
+        """按在线状态把头像画到画布上：在线彩色、离线灰。"""
         cv.delete("all")
         img = self._avatar_image(acc, gray=not online)
         if img is not None:
@@ -694,18 +647,12 @@ class App(tk.Tk):
 
     @staticmethod
     def _nick_font(online: bool):
-        """昵称字体：**在线加粗**（绿色字笔画细，不加粗不够醒目 —— 用户要求），
-        离线常规字重，两者拉开对比。"""
+        """昵称字体：在线加粗，离线常规字重。"""
         return ("Microsoft YaHei UI", 11, "bold") if online \
             else ("Microsoft YaHei UI", 11)
 
     def _fit_wrap(self, lbl, event) -> None:
-        """把 Label 的换行宽度对齐**容器的实际宽度**（长文本自动折行）。
-
-        `wraplength` 只认固定像素值，所以必须由容器的 `<Configure>` 回填；
-        加"值没变就不设"的判断，避免 `Configure → config → Configure` 反复触发。
-        昵称（绑 `mid`）与空态提示（绑提示 Label 自身）共用这一个方法。
-        """
+        """把 Label 的换行宽度对齐容器的实际宽度（长文本自动折行）。"""
         try:
             w = max(60, int(event.width))
             if getattr(lbl, "_full_text", None) is not None:
@@ -716,12 +663,7 @@ class App(tk.Tk):
             pass
 
     def _clip_nick(self, lbl, width: int = 0) -> None:
-        """昵称**最多占两行**，超出的部分用省略号收尾（卡片高度是固定的）。
-
-        为什么必须限制行数：卡片高度统一成 `CARD_H`（两行昵称的高度）之后，
-        第三行没有地方放 —— 不裁的话会被卡片边缘切掉半个字，比省略号更难看。
-        宽度按像素算（`tkfont` 量文本宽度），中英文混排也能算准。
-        """
+        """昵称最多占两行，超出部分用省略号收尾。"""
         try:
             if not width:
                 width = int(lbl.cget("wraplength"))
@@ -817,15 +759,7 @@ class App(tk.Tk):
                                                  else GRAY))
 
     def _bind_drag(self) -> None:
-        """让**窗口内任意位置**都能按住拖动（用户要求：不限于标题栏）。
-
-        只需绑**顶层窗口**一次：tkinter 的事件会沿 bindtags 从目标控件逐级
-        冒泡到 toplevel（`.`），所以点在任何 Label / Frame / 头像画布上，
-        最终都会走到 _drag_start —— 不必递归给每个控件挂绑定。
-
-        按钮与滚动条在 _drag_start 里按 **事件最初的目标控件** 排除：它们要保持
-        "点一下就触发" / "拖滑块滚列表" 的原生行为，被拖动抢走会很难用。
-        """
+        """让窗口内任意位置都能按住拖动（按钮与滚动条除外）。"""
         if getattr(self, "_wxprof_drag", False):
             return
         self._wxprof_drag = True
@@ -880,10 +814,7 @@ class App(tk.Tk):
                 self.winfo_screenwidth(), self.winfo_screenheight())
 
     def _maybe_dock(self) -> None:
-        """窗口停稳后判断：贴着**屏幕右边缘**就进入贴边态。
-
-        （用户要求：贴边隐藏**只对右边生效**，左边与顶边都不贴。）
-        """
+        """窗口停稳后判断：贴着屏幕右边缘就进入贴边态。"""
         self._cfg_job = None
         if self._anim_job or self._dragging:    # 滑动动画 / 拖动过程中不要干扰
             return
@@ -957,11 +888,7 @@ class App(tk.Tk):
                 self._docked_shown = False
 
     def _poll_show_event(self) -> None:
-        """轮询"请显示窗口"信号 —— 第二个实例被单实例闸门拦下时发的。
-
-        用 auto-reset 事件：WaitForSingleObject 返回 0 即消费掉信号，
-        不会重复触发。500 ms 一轮，开销可忽略。
-        """
+        """轮询"请显示窗口"信号（第二个实例被单实例闸门拦下时发的）。"""
         h = _SHOW_EVENT_HANDLE
         if h:
             try:
@@ -974,11 +901,7 @@ class App(tk.Tk):
         self.after(500, self._poll_show_event)
 
     def _undock_and_focus(self) -> None:
-        """把窗口从贴边状态收回屏幕中央并置顶（被唤醒时调用）。
-
-        贴在屏幕边缘时窗口是"正常显示但位置在屏幕外"，**光靠 ShowWindow
-        唤不回来** —— 必须由窗口自己重置几何位置，所以走这条信号通路。
-        """
+        """把窗口从贴边状态收回屏幕中央并置顶。"""
         log_line("收到第二个实例的唤醒请求，把窗口显示到前台")
         try:
             if self._dock or self._anim_job:
@@ -1031,11 +954,7 @@ class App(tk.Tk):
         threading.Thread(target=job, daemon=True).start()
 
     def _log_login(self, text: str) -> None:
-        """登录过程的日志**同时**落日志文件与界面状态行。
-
-        login 模块每一步都有 log，落盘后用户反馈"登录出问题"时能直接看出卡在哪
-        一步。本方法在**后台线程**被调用 ⇒ 界面更新一律 `after` 回主线程。
-        """
+        """登录过程的日志同时落日志文件与界面状态行。"""
         try:
             log_line("[登录] %s" % str(text).strip())
         except Exception:                       # noqa: BLE001
@@ -1046,12 +965,7 @@ class App(tk.Tk):
             pass
 
     def _do_login(self, acc) -> dict:
-        """登录一个账号。
-
-        `hidden` 兜底：流程一旦早退（实例已满、启动失败、config 载入不完整…），
-        也要把第 2 步收进托盘的窗口显示回来 —— 否则用户的微信窗口会莫名留在
-        托盘里，看起来像是被本程序退出了。
-        """
+        """登录一个账号。"""
         hidden = []
         try:
             with ui.ui_scope():
@@ -1183,13 +1097,7 @@ def _warn_no_uia(parent=None) -> None:
 
 
 def _preflight() -> bool:
-    """启动自检：UI 自动化不可用时返回 False（**只检测 + 落日志，不弹窗**）。
-
-    `ui.available()` 为假（import uiautomation 失败）时，登录窗口/主界面的探测会
-    **静默返回空**，表现为"看不到微信、点了没反应"。弹窗不在这里做：本函数跑在
-    后台线程（tkinter 对话框只能在主线程弹），由主线程拿到返回值后调
-    `_warn_no_uia()`。
-    """
+    """启动自检：UI 自动化不可用时返回 False（只检测与落日志，不弹窗）。"""
     with ui.ui_scope():     # 在已 CoInitialize 的线程里做延迟导入与自检
         ok = ui.available()
         log_line("启动自检：frozen=%s  解释器=Python %s  uiautomation导入=%s"

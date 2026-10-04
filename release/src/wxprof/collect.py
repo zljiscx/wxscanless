@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""采集：把当前登录的账号收进档案。
-
-    ① 读 live global_config → wxid / uin（varint）/ 头像 URL / 昵称
-    ② 用 uin 定位槽位（含 monitordata_<uin>_<X> 的那个）
-    ③ 采该槽位的 host\\ 整目录
-    ④ 采 config 一对（global_config + .crc）
-"""
+"""采集：把当前登录的账号收进档案。"""
 from __future__ import annotations
 
 import os
@@ -29,15 +23,7 @@ def _now() -> str:
 
 
 def locate_slot(env, vault, uin: int) -> str:
-    """定位某 uin 所在槽位；不确定返回空串。
-
-    两重判据：
-      ① `slot.slot_of_uin()` —— 基于"当前账号"（时间簇），对新账号同样成立；
-      ② **host 指纹兜底** —— `host\\host-redirect.xml` 是账号级且内容稳定
-         （实测两账号互不相同、槽位与档案能一一对上），比 mtime 与 kvcomm
-         累积都可靠。但它只对"已收录且 host 齐备"的账号有效，
-         所以只作第二重保险，新账号首次采集仍靠 ①。
-    """
+    """定位某 uin 所在槽位；不确定返回空串。"""
     s = slot.slot_of_uin(env, uin)
     if s:
         return s
@@ -67,14 +53,7 @@ def resolve_wxid(env, slot_name: str, uin: int, live: dict, vault) -> str:
 
 
 def online_accounts(env, vault, live: dict = None) -> dict:
-    """当前**已登录**的账号：{wxid: 槽位}。每个槽位最多产出一个账号。
-
-    判据 = 槽位被占用（config.ini 独占句柄）**且** `current_uin()` 能给出当前账号
-    （= 登录成功且非历史残留）。停在登录页的实例只有前者，不算在线。
-
-    ⚠️ 不能遍历 `monitordata_uins()`：微信从不清理旧的 `monitordata_<uin>`，一个
-    槽位会累积多个历史账号，那样会把已退出的账号一直报成在线。
-    """
+    """当前已登录的账号：{wxid: 槽位}。"""
     if live is None:
         live = live_summary(env)
     out = {}
@@ -91,11 +70,7 @@ def online_accounts(env, vault, live: dict = None) -> dict:
 
 
 def refresh_host(env, vault: Vault, acc: Account, slot_name: str) -> bool:
-    """只刷新某个在线账号的 host（host 分槽位存放，随时可安全更新）。
-
-    返回是否真的更新了。**不采 config**：多实例在线时 live config 只属于
-    "最后一个写入者"，拿它覆盖别的账号就是串档。
-    """
+    """只刷新某个在线账号的 host，返回是否真的更新了。"""
     if not slot_name or acc is None:
         return False
     fp = slot.host_fingerprint(env, slot_name)

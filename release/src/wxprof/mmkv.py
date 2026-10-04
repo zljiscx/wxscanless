@@ -1,17 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MMKV 解密与解析（纯 Python AES-128-CFB，无第三方依赖）。
-
-解密 `<数据根>\\xwechat_files\\all_users\\config\\global_config`（+ .crc），读出它属于
-哪个账号（wxid / 昵称 / uin），用于快照自校验以避免串档。
-
-格式要点：
-  · 密钥 = Weixin.dll 里的明文常量 "xwechat_crypt_key" 的前 16 字节
-  · 主文件 [4 字节头][密文 payload][0x00 填充]；.crc 给出 version / sequence / IV / actualSize
-  · payload 为 MMKV 迷你 protobuf：循环 { keyLen key valueLen value }
-  · CFB 只有第一分组受 IV 影响，故对所有候选 IV 只重算第一块
-
-用法：python -m wxprof.mmkv [--key] [路径...]
-"""
+"""MMKV 解密与解析（纯 Python AES-128-CFB，无第三方依赖）。"""
 from __future__ import annotations
 
 import hashlib
@@ -129,11 +117,7 @@ class AesCfb128:
         return bytes(out)
 
     def decrypt_many(self, ivs: list, data: bytes) -> list:
-        """一次解密多个候选 IV，返回 [(名称, iv, 明文)]。
-
-        CFB 链上只有第一块受 IV 影响，所以密文链只算一遍，
-        每个候选 IV 只额外付出一次分组加密的代价。
-        """
+        """一次解密多个候选 IV，返回 [(名称, iv, 明文)]。"""
         blocks = [data[i:i + 16] for i in range(0, len(data), 16)]
         tail = [None] * len(blocks)
         for i in range(1, len(blocks)):
@@ -193,12 +177,7 @@ def _coverage(ents: list) -> int:
 
 
 def _best_alignment(payload: bytes) -> tuple:
-    """返回 (起点, 条目列表, 覆盖率)。
-
-    先用"长度前缀 + 全可打印键名"这个廉价特征筛出候选起点，再对候选做完整
-    解析并按覆盖率取优。这样既能覆盖"首个条目因 IV 不可靠而不可达"的情况
-    （真实起点可能在上百字节之后），又不必对每个偏移都做完整解析。
-    """
+    """返回 (起点, 条目列表, 覆盖率)。"""
     total = len(payload)
     best = (0, [], 0)
     i = 0
@@ -219,12 +198,7 @@ def _best_alignment(payload: bytes) -> tuple:
 
 
 def _iv_candidates(crc: bytes) -> list:
-    """候选 IV。
-
-    只影响 payload 最前面那一个分组，因此没必要穷举全空间；取 zero、
-    .crc 的 iv 字段（MMKV 规范位置 12..28）以及该字段附近几个 4 字节
-    对齐窗口即可，代价可控。
-    """
+    """候选 IV。"""
     out = [("zero", b"\x00" * 16), ("crc[12:28]", crc[12:28])]
     for off in range(0, min(len(crc) - 16, 40) + 1, 4):
         out.append(("crc@%d" % off, crc[off:off + 16]))
@@ -329,20 +303,12 @@ _probe_cache = {}      # 绝对路径 -> (md5, summary dict)
 
 
 def fingerprint(path: str) -> str:
-    """文件内容 md5。
-
-    MMKV 是内存映射文件，写完不一定更新 mtime，所以判断"变没变"必须看内容。
-    """
+    """文件内容 md5。"""
     return file_md5(path)
 
 
 def probe(path: str) -> dict:
-    """解密并摘要一份 global_config，按**内容指纹**缓存。
-
-    返回 summary() 的全部字段，外加 fp（文件内容 md5）。
-    文件不存在或解密失败返回 {}。watcher 每 2 秒问一次，靠这层缓存把
-    真正解密（纯 Python AES，约毫秒级）压到"内容变化时"才做一次。
-    """
+    """解密并摘要一份 global_config，按内容指纹缓存。"""
     fp = fingerprint(path)
     if not fp:
         return {}
@@ -431,11 +397,7 @@ def default_targets() -> list:
 
 
 def _project_root() -> str:
-    """项目根（同时含 release\\ 与 data\\ 的那一级）。
-
-    优先用启动器注入的 WXPROF_ROOT；直接以脚本运行时按目录层级回退 ——
-    本文件位于 release\\src\\wxprof\\，向上四级即项目根。
-    """
+    """项目根（同时含 release 与 data 的那一级）。"""
     env = os.environ.get("WXPROF_ROOT")
     if env:
         return env
