@@ -2,12 +2,6 @@
 """启动器：唯一被打包进 EXE 的代码。
 
 职责：定位程序根目录与外置代码区 `release\\`，做完整性自检；加载业务代码并转交 `main()`。
-
-★ 打包时必须用 --exclude-module 排除 `release\\` 下的模块（含 uiautomation / comtypes）：
-PyInstaller 会把导入器注册到 sys.meta_path，优先级高于 sys.path —— 一旦打进 EXE，
-外置的同名模块将永不加载，且不报任何错误。
-
-★ release\\ 缺失或加载失败时只报告并弹窗，不自动替换或重建任何代码。
 """
 from __future__ import annotations
 
@@ -18,9 +12,7 @@ import traceback
 
 from tkinter import messagebox
 
-# ------------------------------------------------------------------ 路径
 # 打包后：根目录 = exe 所在目录；开发期：根目录 = 本文件所在目录。
-# 注意不能用 __file__ 定位 exe —— 单文件模式下它指向临时解压目录 _MEIPASS。
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 if IS_FROZEN:
     ROOT = os.path.dirname(os.path.abspath(sys.executable))
@@ -31,7 +23,7 @@ RELEASE = os.path.join(ROOT, "release")
 APP_PY = os.path.join(RELEASE, "app.py")
 LOG_PATH = os.path.join(ROOT, "logs", "wechat_launcher.log")
 
-# 完整性自检点：**只用于在日志里精确定位"缺了什么"，不做任何修复**。
+# release 完整性自检点（只报告，不做修复）
 PROBE = (
     "app.py",
     os.path.join("src", "wxprof", "__init__.py"),
@@ -40,7 +32,6 @@ PROBE = (
 )
 
 
-# ------------------------------------------------------------------ 日志
 def log(text: str) -> None:
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -51,7 +42,7 @@ def log(text: str) -> None:
         pass
 
 
-if IS_FROZEN:                       # --noconsole 下 stdout/stderr 为 None
+if IS_FROZEN:
     class _LogStream:
         def write(self, s):
             if s and s.strip():
@@ -69,13 +60,11 @@ if IS_FROZEN:                       # --noconsole 下 stdout/stderr 为 None
         sys.stderr = _LogStream()
 
 
-# ------------------------------------------------------------ 完整性自检
 def missing_parts() -> list:
     """`release\\` 里缺哪些部件。**只报告，不修复**（见模块头说明）。"""
     return [p for p in PROBE if not os.path.exists(os.path.join(RELEASE, p))]
 
 
-# ---------------------------------------------------------------- 加载业务
 def load_app(tag: str):
     """从外置的 app.py 加载模块。
 
@@ -94,12 +83,11 @@ def load_app(tag: str):
     try:
         spec.loader.exec_module(mod)
     except BaseException:
-        sys.modules.pop(name, None)         # 失败时清理半成品，便于重试
+        sys.modules.pop(name, None)
         raise
     return mod
 
 
-# ---------------------------------------------------------------- 异常兜底
 def on_uncaught(exc_type, exc, tb) -> None:
     text = "".join(traceback.format_exception(exc_type, exc, tb))
     log("未捕获异常：\n" + text)
@@ -117,13 +105,11 @@ def on_uncaught(exc_type, exc, tb) -> None:
         pass
 
 
-# ------------------------------------------------------------------ 主流程
 def main() -> None:
     log("启动：frozen=%s  根目录=%s" % (IS_FROZEN, ROOT))
 
     miss = missing_parts()
     if miss:
-        # ★ 只报告。绝不从任何"副本"里铺回去 —— 那会静默回退用户的代码版本。
         log("外置代码区不完整，缺少：%s" % ", ".join(miss))
 
     if not os.path.isfile(APP_PY):
@@ -131,7 +117,6 @@ def main() -> None:
             "找不到业务入口：%s\n"
             "请确认 release\\ 目录与程序放在同一位置且内容完整。" % APP_PY)
 
-    # 让业务代码在任何阶段都能找到 ext / src（app.py 自身也会补一次，幂等）
     os.environ["WXPROF_ROOT"] = ROOT
     for p in (os.path.join(RELEASE, "ext"), os.path.join(RELEASE, "src")):
         if os.path.isdir(p) and p not in sys.path:
@@ -141,7 +126,7 @@ def main() -> None:
         app = load_app("main")
     except Exception:
         log("加载外置代码失败：\n" + traceback.format_exc())
-        raise                               # 交给 on_uncaught 弹窗报错，不尝试替换
+        raise
 
     app.main()
 

@@ -8,11 +8,6 @@
     2. 向按钮自身的窗口句柄投递鼠标消息点击（不用屏幕坐标、不移动光标）
     3. 判定是否真的进了主界面（mmui::MainWindow 出现）
 
-★ 线程：非主线程使用 uiautomation 前必须先 CoInitialize，否则 UI 操作静默失败
-  （错误只写入 @AutomationLog.txt）。工作线程请用：
-      with ui.ui_scope():
-          win = ui.login_window_of(pid)
-
 依赖 uiautomation（已随 release\\ext\\ 分发）；导入失败时 available() 返回 False，
 调用方应显式报错而不是静默降级。
 """
@@ -23,11 +18,6 @@ import ctypes
 import os
 import time
 from ctypes import wintypes
-
-# ★ 延迟导入（走 _ensure()），不在模块导入期做：import uiautomation 要数百毫秒
-#   （comtypes 首次解析系统类型库），会拖慢"双击到窗口出现"。
-#   `_OK` 初值为 None（还没试过）⇒ 所有判据必须走 _ensure()，不能直接读 _OK。
-#   外部（app.py）请用 available()。
 auto = None
 _OK = None                      # None=尚未尝试 / True=可用 / False=不可用
 _IMPORT_ERR = ""
@@ -82,7 +72,7 @@ MK_LBUTTON = 0x0001
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 
-SW_HIDE = 0                      # 隐藏窗口（纯 Win32 可见性，不触发微信的关闭逻辑）
+SW_HIDE = 0                      # 隐藏窗口
 SW_SHOW = 5                      # 按当前状态显示
 SW_RESTORE = 9                   # 从最小化/隐藏状态恢复并激活
 
@@ -91,11 +81,9 @@ SW_RESTORE = 9                   # 从最小化/隐藏状态恢复并激活
 #   mouse-btn  鼠标三连      → 按钮句柄
 #   key-btn    键盘 VK_SPACE → 按钮句柄
 #   mouse-win  鼠标三连      → 窗口句柄
-# 铺满「{键盘, 鼠标} × {窗口句柄, 按钮句柄}」的 2×2 —— 要覆盖的是**通路**，
-# 不是方法个数（同类方法通常一起失效，再加只是重复押注）。
 CLICK_METHODS = ("key-win", "mouse-btn", "key-btn", "mouse-win")
 
-# 旧名兼容（"mouse"=现 mouse-btn，"key"=现 key-btn）
+# 旧名兼容
 CLICK_ALIAS = {"mouse": "mouse-btn", "key": "key-btn"}
 
 # 日志里显示的中文名
@@ -103,7 +91,6 @@ CLICK_CN = {"key-win": "键盘回车→窗口", "mouse-btn": "鼠标三连→按
             "key-btn": "键盘空格→按钮", "mouse-win": "鼠标三连→窗口"}
 
 
-# ----------------------------------------------------------- 线程初始化
 def init_thread() -> bool:
     """在当前线程初始化 UI Automation（工作线程里必须调用一次）。"""
     if not _ensure():
@@ -169,17 +156,6 @@ def grab(path: str, ctrl=None) -> str:
         return ""
 
 
-# --------------------------------------- 顶层窗口快路径（Win32 枚举 + 句柄缓存）
-# 用 EnumWindows 按 pid 过滤 + 句柄缓存，避免 GetRootControl().GetChildren()
-# 每次重建整张桌面元素表（数百毫秒级）。
-#
-# ★ 三条约束：
-#   ① UIA 的 ClassName ≠ Win32 类名 —— 微信两类窗口的 Win32 类名**都是**
-#      Qt51514QWindowIcon，只有 UIA 报 mmui::LoginWindow / mmui::MainWindow
-#      ⇒ 只能按 pid 过滤，判类型仍靠 ControlFromHandle 读 ClassName。
-#   ② 只对**可见**窗口读 UIA（一个微信进程有十几个隐藏顶层窗口）。
-#   ③ **只缓存 mmui::* 的结论** —— 窗口刚建时 provider 尚未注册，先读到的是
-#      Win32 类名；缓存它会永远看不到登录窗口。
 _FAST_WND = True                # 出问题时置 False 即回到老的整树枚举
 WND_VISIBLE_ONLY = True         # 只认可见窗口（登录/主界面需要它都是可见的）
 
@@ -194,7 +170,7 @@ _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
 _WND_CACHE: dict = {}           # hwnd(int) -> (UIA 控件, UIA 类名)
 _WX_PIDS = [0.0, set()]         # [上次刷新时刻, 微信全部 pid；None = 枚举本身失败]
-_WX_PIDS_TTL = 0.3              # pid 集合缓存时长（刷新一次 ~9 ms）
+_WX_PIDS_TTL = 0.3              # pid 集合缓存时长
 
 
 def _top_windows() -> list:
@@ -220,10 +196,6 @@ def _wx_pids():
     不读命令行是有意的 —— 读 PEB 取 CommandLine 每个进程都要 OpenProcess + 读内存，
     十几个子进程就是十几毫秒；而这里只要回答"这个窗口是不是微信的"，进程名足够
     （实测 9 ms/次）。带上 0.3 s 缓存，热路径上几乎不花时间。
-
-    ★ 返回值三态，别混：
-        `set()`  —— 枚举成功，当前**确实没有**微信进程（正常情况，不该兜底）
-        `None`   —— **枚举本身失败**（Toolhelp32 快照都拿不到）⇒ 调用方必须退回老做法
     """
     now = time.time()
     if now - _WX_PIDS[0] < _WX_PIDS_TTL:
@@ -242,11 +214,6 @@ def _wx_pids():
 
 def _control_of(hwnd: int):
     """hwnd → (UIA 控件, UIA 类名)。读不出来返回 (None, "")。
-
-    ★ 缓存规则（关键）：**只有读到 `mmui::*` 才认为结论稳定、长期复用**；读到别的
-    （Win32 类名等）时**每次重读** —— 微信的 UIA provider 是"窗口先建出来、provider
-    稍后才注册"，先读到的 `Qt51514QWindowIcon` 过一会儿就会变成 `mmui::LoginWindow`。
-    把前者缓存住 = 登录窗口永远找不到。重读只花 ~4 ms（控件对象本身复用）。
     """
     ent = _WND_CACHE.get(hwnd)
     if ent is not None and ent[1] in _MMUI_CLS:
@@ -259,7 +226,6 @@ def _control_of(hwnd: int):
         try:
             c = auto.ControlFromHandle(hwnd)
         except Exception:                       # noqa: BLE001
-            # 实测：窗口正在销毁时抛 `-2147220991 EVENT_E_NOCONNECTION`
             return None, ""
         if c is None:
             return None, ""
@@ -321,12 +287,12 @@ def _windows_of_class(cls: str, pid: int = 0) -> list:
             if not got_pids:
                 pids = _wx_pids()
                 got_pids = True
-                if pids is None:                # ★ 枚举失败（≠"没有微信进程"）⇒ 走老路
+                if pids is None:                # 枚举失败 ⇒ 走老路
                     return _legacy_windows(cls, pid)
             if wpid not in pids:
                 continue
         if WND_VISIBLE_ONLY and not vis:
-            continue                            # 隐藏的消息窗口不值得读 UIA（见文件头③）
+            continue                            # 隐藏的消息窗口不读 UIA
         cand += 1
         c, k = _control_of(hwnd)
         if c is None:
@@ -344,7 +310,6 @@ def _windows_of_class(cls: str, pid: int = 0) -> list:
     return out
 
 
-# ----------------------------------------------------------- 窗口与控件
 def login_windows() -> list:
     """全部登录窗口（多开时可能同时有好几个，必须能分辨）。"""
     return _windows_of_class(LOGIN_CLASS)
@@ -473,7 +438,6 @@ def shows_qr(win) -> bool:
         return False
 
 
-# --------------------------------------------------- 登录页状态（一眼可判）
 ST_ONE_CLICK = "one_click"   # 有登录态：显示头像+昵称，有「进入微信」
 ST_QR = "qr"                 # 无登录态 / 票据被服务端拒：直接是二维码页
 ST_LOADING = "loading"       # 窗口在，但控件树还没建好（启动后一瞬间）
@@ -523,7 +487,6 @@ def login_state(win) -> tuple:
     return ST_LOADING, nick, "暂无明确证据（共 %d 个控件名）" % len(names)
 
 
-# ----------------------------------------------------------- 后台点击原语
 def _native_handle(ctrl) -> int:
     try:
         return int(ctrl.NativeWindowHandle or 0)
@@ -545,11 +508,6 @@ def _post(hwnd: int, msg: int, wp: int, lp: int) -> bool:
 
 def _key_strokes(hwnd: int, vk: int) -> bool:
     """向指定句柄投递一次按键（按下+抬起），不动真实键盘状态。
-
-    ★ 实测（2026-10-04）：**按键生效不依赖 Win32 焦点**。`SetFocus` 返回 0
-    （没拿到焦点）的情况下，空格/回车照样 62~125 ms 生效 —— 因为 `WM_KEYDOWN`
-    是**直接投给窗口句柄**的，Qt 收到后交给它**自己的内部焦点控件**处理；
-    Qt 的焦点与 Win32 的焦点是两套独立机制。
     """
     scan = _user32.MapVirtualKeyW(vk, 0) & 0xFF
     down = 1 | (scan << 16)
@@ -587,7 +545,7 @@ def click(win, name: str, method: str = "mouse-btn") -> bool:
         hwnd = h_win if method == "key-win" else h_btn
         if not hwnd:
             return False
-        try:                                    # 拿不到也无妨（见 _key_strokes 说明）
+        try:                                    # 拿不到也无妨
             _user32.SetFocus(wintypes.HWND(hwnd))
         except Exception:                       # noqa: BLE001
             pass
@@ -599,7 +557,7 @@ def click(win, name: str, method: str = "mouse-btn") -> bool:
         hwnd = h_btn if method == "mouse-btn" else h_win
         if not hwnd:
             return False
-        # 屏幕坐标 → 目标窗口的**客户区**坐标（Qt 只认客户区坐标）
+        # 屏幕坐标 → 目标窗口的客户区坐标
         try:
             r = btn.BoundingRectangle
             pt = _POINT((r.left + r.right) // 2, (r.top + r.bottom) // 2)
@@ -615,11 +573,10 @@ def click(win, name: str, method: str = "mouse-btn") -> bool:
     return False
 
 
-QR_STABLE = 3.0       # 二维码页的**正向证据**需稳定这么多秒才敢下结论
+QR_STABLE = 3.0       # 二维码页正向证据需稳定秒数
 GONE_GRACE = 12.0     # 登录窗口消失后，再等这么多秒看主界面是否出现
-CLICK_RETRY = 0.4     # 一招发出去后等多久没反应就**换下一招**（实测最慢一招 173 ms 见效，
-                      # 0.4 s 留足余量；再短有把有效招误判成无效的风险）
-MAX_CLICKS = len(CLICK_METHODS)  # 级联走满一遍就够（每招都是不同通路，重复发无意义）
+CLICK_RETRY = 0.4     # 一招发出后没反应就换下一招的等待
+MAX_CLICKS = len(CLICK_METHODS)  # 级联走满一遍即止
 QR_CHECK_EVERY = 0.8  # 二维码证据检查限频（遍历控件树较贵，不必每轮都做）
 
 
@@ -651,11 +608,6 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
     """
     def appeared() -> bool:
         """本次实例的主界面是否已出现。
-
-        ★ **必须按 `pid` 判，不能用「主窗口总数 > base_main」**：登录过程中会把旧
-        实例的窗口显示回来（`login.restore_windows` 提前恢复），那些"复活"的窗口
-        会让总数凭空虚高、把**别人的窗口**算成本次登录的成果（实测过一次假成功：
-        账号停在登录页、「进入微信」一次都没点，却被判成功）。
         """
         if pid:
             return main_window_of(pid) is not None
@@ -686,12 +638,8 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         while time.time() < end:
             if appeared():
                 return "main"
-            # ★ 有 pid 就按 pid 判登录窗口在不在：比 `find_login_window()` 更准
-            #   （多开时别人的登录窗口不算数），也更快（不必查微信 pid 集合）。
             lw = login_window_of(pid) if pid else find_login_window()
             if lw is None:
-                # ★ 登录窗口消失 ≠ 失败：进入主界面时登录窗口**先销毁**、主界面
-                #   **稍后**才建出来（实测 16.4s 窗口没了、17.9s 主界面才可检测）。
                 if not gone_at:
                     gone_at = time.time()
                 elif time.time() - gone_at >= GONE_GRACE:
@@ -711,10 +659,6 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
             time.sleep(poll)
         return ""
 
-    # ---- 阶段一：等「进入微信」出现（**出现即点**，不等"稳定"）
-    #      判"按钮在不在"直接调 has_button（`FindControl` 命中就返回，实测 ~16 ms），
-    #      不用 login_state 那种"限 600 节点整树遍历"（~50 ms 起，且必须遍历完
-    #      才知道有没有按钮）；轮询粒度 = poll（默认 0.15 s）。
     if ready > 0:
         t0 = time.time()
         end = t0 + ready
@@ -739,9 +683,6 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
             log("  %.0f 秒内未等到「进入微信」按钮" % ready)
             return False, ""
 
-    # ---- 阶段二：级联点击 + 细粒度确认。按 CLICK_METHODS 顺序一招一招来：
-    #      某招发出后主界面出现 / 按钮消失 ⇒ 收工；没动静 ⇒ **换下一招**
-    #      （不同通路，比"同招重发"有信息量）。走满一遍仍无反应 ⇒ 只等不点。
     sent_any = False
     attempts = 0
     gone = False
@@ -755,7 +696,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         except Exception:                       # noqa: BLE001
             still = True
         if not still:
-            # 按钮没了、又没有二维码证据 —— 大概率正在进主界面，别再点
+            # 按钮已消失且无二维码证据 → 正在进入，别再点
             log("  「进入微信」已消失（无二维码证据）→ 判为正在进入，停止重试")
             sent_any = True
             break
@@ -779,8 +720,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
             continue
         sent_any = True
         log("  第 %d 招「%s」已发出" % (attempts, CLICK_CN.get(m, m)))
-        # 细粒度确认 CLICK_RETRY 秒：主界面出现 / 按钮消失就早退；
-        # 都没发生 ⇒ 这一招没落到按钮上，循环回去**换下一招**。
+        # 确认 CLICK_RETRY 秒：主界面出现或按钮消失就早退，否则换下一招
         t1 = time.time() + CLICK_RETRY
         while time.time() < t1:
             if appeared():
@@ -831,14 +771,6 @@ def hide_main_window(win, log=print) -> int:
     这是多开的必要前置动作：已有实例的主窗口**可见**时，再启动微信会被"转交"给
     那个实例（不产生独立进程）；主窗口**不可见**时才会真正新建实例。
 
-    ★★ 必须用 `ShowWindow(SW_HIDE)`，不能用 `WM_CLOSE`：`WM_CLOSE` 会被微信当作
-    "关闭主窗口 → 隐藏到托盘"，**微信内部（Qt 层）会置一个隐藏标记**，而这个标记只有
-    Qt 自己的 `show()`（即用户点标题栏按钮）能清。从外部用 `ShowWindow` 怎么组合都
-    清不掉（`SW_RESTORE`、`SW_SHOW`、`SW_MINIMIZE`+`SW_RESTORE`、
-    `AttachThreadInput` 强制激活、`WM_SYSCOMMAND` 的 `SC_MINIMIZE`/`SC_MAXIMIZE`
-    实测全部无效）：窗口看得见、画得动，但**鼠标键盘全被丢弃**。
-    `SW_HIDE` 只是 Win32 层的可见性变化，不经过微信的关闭逻辑，恢复后功能完好。
-
     **返回被隐藏的窗口句柄**（0 表示没成功），调用方拿到它就能用 `show_window`
     原样显示回来 —— 隐藏只是"让它暂时不可见"，不是让用户丢掉窗口。
     """
@@ -853,7 +785,7 @@ def hide_main_window(win, log=print) -> int:
     try:
         _user32.ShowWindow(wintypes.HWND(h), SW_HIDE)
     except Exception as e:                      # noqa: BLE001
-        log("  隐藏窗口失败：%r" % (e,))         # 别再静默吞掉真实错误
+        log("  隐藏窗口失败：%r" % (e,))
         return 0
     return h
 
@@ -890,21 +822,17 @@ def show_window(hwnd: int, log=print) -> bool:
     """
     if not hwnd:
         return False
-    # ★ 句柄必须**全程保持 int**：Python 3.11 上 `int(wintypes.HWND(x))` 会抛
-    #   ValueError（它拿裸内存去当字符串解析，报 "invalid literal for int()"）。
-    #   早先版本在这里用它格式化日志，异常被 except 吞掉 —— 窗口其实已经显示
-    #   回来了，函数却返回 False，白折腾一轮才查出。
     h = int(hwnd)
     try:
         if not _user32.IsWindow(wintypes.HWND(h)):
             return False                        # 账号已被用户退出，句柄已失效
         _user32.ShowWindow(wintypes.HWND(h), SW_SHOW)
         if not _user32.IsWindowVisible(wintypes.HWND(h)):
-            _user32.ShowWindow(wintypes.HWND(h), SW_RESTORE)    # 兜底：极少见
+            _user32.ShowWindow(wintypes.HWND(h), SW_RESTORE)    # 兜底
         log("  已把窗口 %s 显示回来" % h)
         return True
     except Exception as e:                      # noqa: BLE001
-        log("  显示窗口失败：%r" % (e,))         # 别再静默吞掉真实错误
+        log("  显示窗口失败：%r" % (e,))
         return False
 
 

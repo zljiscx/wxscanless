@@ -31,7 +31,6 @@ _KEY = re.compile(r"^key_(\d+)_\d+_")
 _WXID = re.compile(rb"wxid_[0-9a-zA-Z_-]{5,}")
 
 
-# --------------------------------------------------------------- 只读占用判据
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _k32.CreateFileW.restype = ctypes.c_void_p
 _k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
@@ -72,7 +71,6 @@ def slot_busy(env, name: str) -> bool:
     """该槽位是否被某个运行中的实例占用。"""
     p = lock_file(env, name)
     if not os.path.isfile(p):
-        # 从未被使用过（或目录不存在）⇒ 一定空闲
         return False
     return not exclusive_open_ok(p)
 
@@ -95,7 +93,6 @@ def free_slot(env) -> str:
     return ""
 
 
-# --------------------------------------------------------------- 账号锚点
 def kvcomm_dir(env, name: str) -> str:
     return os.path.join(slot_dir(env, name), "kvcomm")
 
@@ -149,8 +146,7 @@ def _mon_entries(env, name: str) -> tuple:
     return zero, cands
 
 
-# `monitordata_0` 与某个 uin 的 mtime 相差在该秒数内 ⇒ 视为"同一次写入"
-# （= 微信登出时把 `_0` 和"最后登录的 uin"成对刷新，两者只差毫秒，顺序不定）
+# monitordata_0 与某 uin 的 mtime 相差在该秒数内 ⇒ 视为同一次写入
 _MON_CLUSTER = 3.0
 
 
@@ -251,7 +247,6 @@ def wxid_in_slot(env, name: str, uin: int) -> str:
     return ""
 
 
-# --------------------------------------------------------------- host 读写
 def host_dir(env, name: str) -> str:
     """槽位的 host 目录（账号级网络路由文件）。"""
     return os.path.join(slot_dir(env, name), "host")

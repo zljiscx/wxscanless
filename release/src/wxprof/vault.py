@@ -8,12 +8,6 @@
         cfg/global_config.crc
         host/...               登录态：账号级网络路由文件
 
-★ cfg 一对必须成对保存与还原（.crc 存着 IV 与校验），缺一或配错对会导致
-  "有档案却每次都要扫码"。
-★ host 是账号级的，须放进实例实际使用的那个槽位（由 slot.free_slot() 启动前算出）才生效。
-
-刻意不采：账号数据目录 <wxid>_<hash>\\config、kvcomm\\*、psk.key、tlsregion.ini、cdncomm\\*
-（均与登录态无关）。
 """
 from __future__ import annotations
 
@@ -74,8 +68,8 @@ class Account:
         self.created = created
         self.last_capture = last_capture
         self.config_fp = config_fp        # 上次存下的 config 对内容指纹
-        self.host_fp = host_fp            # 上次存下的 host 目录指纹（排序串的 md5）
-        self.slot = slot                  # 上次采集时所在槽位（仅记录）
+        self.host_fp = host_fp            # 上次存下的 host 目录指纹
+        self.slot = slot                  # 上次采集时所在槽位
 
     @property
     def aid(self) -> str:
@@ -105,7 +99,6 @@ class Vault:
         self.root = root
         os.makedirs(root, exist_ok=True)
 
-    # ------------------------------------------------------------- 路径
     def account_dir(self, wxid: str) -> str:
         return os.path.join(self.root, wxid)
 
@@ -123,7 +116,6 @@ class Vault:
         from . import avatar
         return avatar.gray_path_of(self.avatar_path(wxid))
 
-    # ------------------------------------------------------------- 读写
     def list_accounts(self) -> list:
         out = []
         if not os.path.isdir(self.root):
@@ -182,7 +174,6 @@ class Vault:
                 pass
         return (not errs), errs
 
-    # ------------------------------------------------------------- 快照查询
     def has_config(self, wxid: str) -> bool:
         return all(os.path.isfile(os.path.join(self.cfg_dir(wxid), fn))
                    for fn in CONFIG_FILES)
@@ -207,7 +198,6 @@ class Vault:
         from . import slot
         return slot.fp_digest(self.host_fingerprint(wxid))
 
-    # ------------------------------------------------------------- 保存
     def save_config(self, wxid: str, src_dir: str, expect_wxid: str = "") -> tuple:
         """把活配置对（src_dir 下的 global_config(+.crc)）存进档案。
 
@@ -249,7 +239,6 @@ class Vault:
         from . import slot
         return slot.mirror_host(src_host, self.host_dir(wxid))
 
-    # ------------------------------------------------------------- 指纹
     def cfg_fingerprint(self, wxid: str) -> str:
         """档案里 config 对的内容指纹（两文件 md5 拼接后取 md5）。"""
         vals = [file_md5(os.path.join(self.cfg_dir(wxid), fn))

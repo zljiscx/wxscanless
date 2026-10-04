@@ -3,10 +3,6 @@
 
 流程：占用最小空闲槽位 → 收起已有实例主窗口 → 热替换 config 对 → 铺 host 到目标槽位
 → 启动实例 → 后台点「进入微信」→ 后台判定是否进入主界面。
-
-★ 已在线的账号不允许再次登录。
-★ 全程不碰真实鼠标键盘：点击向按钮句柄投递消息，状态判定走 UI Automation。
-★ config 在微信运行期被内存映射独占，需 rename 让位后写入新文件，已在跑的实例不受影响。
 """
 from __future__ import annotations
 
@@ -18,21 +14,15 @@ from . import collect, mmkv, paths, process, slot, ui
 from .vault import CONFIG_FILES
 
 LIVE_BAK = ".livebak"          # 热替换时被改名让位的旧配置
-POLL = 0.15                    # 统一轮询粒度（UI 读取一次 ~16~50 ms，0.15 s 足够细）
-WINDOW_WAIT = 15.0             # 启动后等"本实例登录窗口"；超时 ⇒ 疑似启动被"转交"
-RETRY_WAIT = 60.0              # 兜底重试的等待（走老方式 WM_CLOSE，启动较慢）
-ENTER_WAIT = 10.0              # 等「进入微信」按钮出现的上限（出现即点，不是固定等）
-CLICK_WAIT = 8.0               # 点击 + 确认的总时长（点完没反应会立刻重发）
+POLL = 0.15                    # 统一轮询粒度
+WINDOW_WAIT = 15.0             # 等本实例登录窗口出现的上限
+RETRY_WAIT = 60.0              # 兜底重试的等待
+ENTER_WAIT = 10.0              # 等「进入微信」按钮出现的上限
+CLICK_WAIT = 8.0               # 点击 + 确认的总时长
 
 
-# --------------------------------------------------------------- 配置装载
 def _remove_quiet(path: str) -> bool:
     """尽力删掉一个临时文件；**删不掉也不抛异常**。
-
-    ★ 本机有 "safe-delete" 拦截：`os.remove` 被改写成"送回收站"，在 F: 卷上
-    可能直接失败（实测：文件仍被微信占用时必失败，报 `trash-failed`）。
-    这类文件只是"让位"用的旧副本，删不掉**绝不该**拖垮整个装载流程 ——
-    早先这里让装载返回 0，界面报"config 载入不完整"，完全看不出真因。
     """
     try:
         os.remove(path)
@@ -78,24 +68,24 @@ def install_config_pair(env, src_dir: str, log=print) -> int:
             return 0
         src[fn] = p
 
-    sweep_backups(env)                      # 顺手清残留，别让历史包袱拖垮本次装载
+    sweep_backups(env)
 
     done = []
     for fn, s in src.items():
         d = os.path.join(env.config_dir, fn)
         try:
-            shutil.copy2(s, d)                  # 未被占用时直接覆盖，最干净
+            shutil.copy2(s, d)
             done.append((fn, None))
             continue
         except OSError:
             pass
         bak = d + LIVE_BAK
-        if os.path.exists(bak):                 # 旧备份让不开名 ⇒ 换个唯一名字
+        if os.path.exists(bak):
             if not _remove_quiet(bak):
                 bak = "%s.%d%s" % (d, int(time.time() * 1000) % 100000, LIVE_BAK)
         try:
             if os.path.exists(d):
-                os.rename(d, bak)               # 被内存映射挡住时先改名让位
+                os.rename(d, bak)
             shutil.copy2(s, d)
             done.append((fn, bak))
         except OSError as e:
@@ -119,11 +109,10 @@ def clean_temp(env) -> None:
     except OSError:
         return
     for fn in names:
-        if LIVE_BAK in fn:                  # 用 in 而不是 endswith：兜住唯一名
+        if LIVE_BAK in fn:
             _remove_quiet(os.path.join(env.config_dir, fn))
 
 
-# --------------------------------------------------------------- 进入判定
 def _entered(env, pid: int, acc, target_slot: str) -> bool:
     """是否真的进了主界面（两条独立证据，任一成立）。
 
@@ -148,9 +137,9 @@ def wait_entered(env, pid: int, acc, target_slot: str,
     while time.time() - t0 < timeout:
         if _entered(env, pid, acc, target_slot):
             return True
-        alive = process.main_pids()               # 一次枚举即可（约 22 ms）
+        alive = process.main_pids()               # 一次枚举即可
         if alive and pid not in alive:
-            log("  实例已退出，停止等待")           # 进程被回收/崩溃
+            log("  实例已退出，停止等待")
             return False
         if time.time() - last > 15:
             last = time.time()
@@ -159,7 +148,6 @@ def wait_entered(env, pid: int, acc, target_slot: str,
     return False
 
 
-# --------------------------------------------------------------- 主流程
 def _hide_existing(log) -> list:
     """隐藏所有**可见**的已登录实例主窗口，返回被隐藏的窗口句柄列表。
 
@@ -264,9 +252,7 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
     hn = slot.install_host(env, target, vault.host_dir(acc.wxid))
     log("  已把 host 铺进槽位 %s（%d 个文件）" % (target, hn))
 
-    # 6) 启动实例，并等**本实例**的登录窗口（按 pid 认；多开时别人的窗口不算数）
-    #    不再采"主窗口基准数"：判据一律按 **pid** 认（见下方 7.5 的说明），
-    #    固定数字的基准会被 "7.5 恢复旧窗口" 直接污染。
+    # 6) 启动实例，等本实例的登录窗口（按 pid 认）
     log("  XWeb 运行时搜索路径：%s"
         % (paths.xweb_runtime_dir(env.appdata_dir) or "<未找到，按原样启动>"))
 
@@ -291,15 +277,11 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
 
     pid, win = _launch_and_wait(WINDOW_WAIT)
 
-    # 6.5) 兜底：本实例迟迟不出现登录窗口 ⇒ 大概率是启动被"转交"给了旧实例，说明
-    #      直接隐藏不足以让微信新建实例。此时退回老做法：先把旧窗口显示出来，再走
-    #      微信自己的"关闭到托盘"（WM_CLOSE），最后重启。代价是那些旧窗口可能"点不动"
-    #      （需用户手动点一下标题栏按钮），但能保证多开不会失败。
     if hidden and (not pid or (win is None and ui.main_window_of(pid) is None)):
         log("  本实例 %.0f 秒内未出现登录窗口 —— 疑似被\"转交\"，"
             "改用老方式（WM_CLOSE）重试" % WINDOW_WAIT)
         for h in list(hidden):
-            ui.show_window(h, log=log)          # 微信对"已隐藏"的窗口常忽略 WM_CLOSE
+            ui.show_window(h, log=log)
         time.sleep(0.5)
         for h in list(hidden):
             ui.close_window(h, log=log)
@@ -312,17 +294,9 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
     res["pid"] = pid
     log("  本次实例 pid=%s" % pid)
 
-    # 7.5) 新实例已出现在登录页 ⇒ 微信的"单实例判定"早已完成，此刻把之前收起的
-    #      窗口显示回来是安全的（再早有可能被判为"已有实例"而被转交）。
-    #      ★ 代价：旧实例主窗口会重新出现在 UIA 树里，所以下面每一处"是否进入主
-    #      界面"的判定都必须按 **pid** 认（见 _entered 与 ui.click_enter 的
-    #      appeared()），**绝不能**用"主窗口总数变多了"。
     restore_windows(hidden, log=log)
 
-    # 8) **「进入微信」一出现就点**，不额外等"稳定"：轮询粒度 POLL=0.15 s，判"按钮
-    #    在不在"用 FindControl（命中即返回，实测 ~16 ms），命中后立刻发点击，不再
-    #    "点一次 → 等满 7 秒 → 才换下一招"。二维码页（登录态失效）仍按"正向证据
-    #    连续稳定 3 秒"判，不会误伤正常登录。
+    # 8) 「进入微信」一出现就点
     if win is not None:
         ok, method = ui.click_enter(win, wait=CLICK_WAIT, ready=ENTER_WAIT,
                                     poll=POLL, log=log, pid=pid)

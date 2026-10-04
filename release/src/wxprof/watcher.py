@@ -5,10 +5,6 @@
     1. 槽位占用 —— <槽位>\\config.ini 的独占句柄（只读判据）
     2. 槽位账号 —— kvcomm\\monitordata_<uin>（登录成功后才写）
     3. live global_config —— 当前配置归属谁、票据是否还在
-
-★ 只有 monitordata_<uin> 出现才代表真登录（实例停在登录页时它被清成 monitordata_0），
-  这也是采集 host 的正确时机。
-采集规则：已收录比对指纹、变了才更新；未收录立即建档。
 """
 from __future__ import annotations
 
@@ -37,7 +33,6 @@ class Watcher:
         self.host_gap = 6.0
         self.status = self._blank()
 
-    # ------------------------------------------------------------- 生命周期
     @staticmethod
     def _blank() -> dict:
         return {"instances": 0, "online": {}, "busy": [], "live_wxid": "",
@@ -74,7 +69,6 @@ class Watcher:
                 self.on_log("监控异常：%s" % e)
             self._stop.wait(self.interval)
 
-    # ------------------------------------------------------------- 轮询
     def poll_once(self) -> dict:
         from . import process
         env = self.env
@@ -94,7 +88,6 @@ class Watcher:
             self._collect(online, live)
         return st
 
-    # ------------------------------------------------------------- 采集
     def _collect(self, online: dict, live: dict) -> None:
         now = time.time()
         live_wxid = live.get("wxid") or ""
@@ -111,8 +104,6 @@ class Watcher:
                 self._notify(res)
 
         # 2) 其它在线账号：只刷新 host（避免用 live config 串档）
-        #    注意 `online` 的键是 **wxid**（collect.online_accounts 的约定），
-        #    不要拿它当 uin 去查表 —— 那样这条分支永远不会命中。
         if not online:
             return
         by_id = {a.wxid: a for a in self.vault.list_accounts()}
@@ -141,6 +132,5 @@ class Watcher:
         except Exception:                       # noqa: BLE001
             pass
 
-    # ------------------------------------------------------------- 对外查询
     def snapshot(self) -> dict:
         return dict(self.status)

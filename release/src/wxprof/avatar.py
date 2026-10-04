@@ -3,9 +3,6 @@
 
 头像地址取自 global_config 的 `mmkv_key_head_img_url`
 （形如 http://wx.qlogo.cn/mmhead/ver_1/<hash>/132）。
-
-★ tkinter（Tk 8.6）只认 PNG / GIF / PPM，不认 JPEG，运行环境也没有 Pillow。
-  故用 Windows 自带的 GDI+（gdiplus.dll，Win7 起支持）经 ctypes 转码，零第三方依赖。
 """
 from __future__ import annotations
 
@@ -18,11 +15,10 @@ from ctypes import wintypes
 UA = ("Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0 Safari/537.36")
 _HEADERS = {"User-Agent": UA, "Accept": "image/*,*/*;q=0.8"}
-AVATAR_SIZE = 132          # 向 CDN 请求的边长（实测 132 可用；/640 返 400；/0 是原图）
-DISPLAY_SIZE = 88          # 落盘边长 = 界面显示边长，**1:1 绘制**，不依赖 tk 缩放
+AVATAR_SIZE = 132          # 向 CDN 请求的边长
+DISPLAY_SIZE = 88          # 落盘边长 = 界面显示边长
 
 
-# --------------------------------------------------------------- 下载
 def download(url: str, dest: str, timeout: float = 10.0) -> bool:
     """下载 url 到 dest。成功返回 True。"""
     if not url:
@@ -38,7 +34,7 @@ def download(url: str, dest: str, timeout: float = 10.0) -> bool:
             f.write(data)
         return True
     except Exception:                           # noqa: BLE001
-        # 再试一次系统代理设置（部分环境需要）
+        # 改用系统代理设置重试
         try:
             opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler(urllib.request.getproxies()))
@@ -54,7 +50,6 @@ def download(url: str, dest: str, timeout: float = 10.0) -> bool:
         return False
 
 
-# --------------------------------------------------------------- GDI+ 转码
 _gdi = ctypes.windll.gdiplus
 
 
@@ -177,10 +172,6 @@ def scale_to_png(src: str, dst: str, size: int) -> bool:
         _gdi.GdiplusShutdown(token)
 
 
-# --------------------------------------------------------------- 离线灰度
-# tkinter 无灰度能力（PhotoImage 只支持整倍缩放），走 GDI+ 新建同尺寸 32bpp
-# 位图，逐像素按亮度重算后存成 PNG。头像仅 88×88 ≈ 7.7k 像素，几十毫秒，
-# 且**生成一次即落盘**长期复用。
 GRAY_SUFFIX = "_gray"
 _LUMA_R, _LUMA_G, _LUMA_B = 299, 587, 114      # ITU-R BT.601 亮度权重（千分比）
 
@@ -248,7 +239,6 @@ def to_gray_png(src: str, dst: str) -> bool:
             return False
         if _gdi.GdipGetImageHeight(src_bmp, ctypes.byref(h)) != 0 or not h.value:
             return False
-        # 先落到 32bppARGB 再逐像素处理：源若是索引色等格式，SetPixel 会失败。
         if _gdi.GdipCreateBitmapFromScan0(w.value, h.value, 0,
                                           _PIXEL_FORMAT_32BPP_ARGB, None,
                                           ctypes.byref(out)) != 0 or not out:
@@ -258,7 +248,7 @@ def to_gray_png(src: str, dst: str) -> bool:
         g_alive = True
         if _gdi.GdipDrawImageRectI(g, src_bmp, 0, 0, w.value, h.value) != 0:
             return False
-        _gdi.GdipDeleteGraphics(g)              # 画完立刻释放，否则位图仍被锁
+        _gdi.GdipDeleteGraphics(g)
         g_alive = False
         px = ctypes.c_uint32(0)
         for y in range(h.value):
@@ -300,7 +290,6 @@ def save_avatar(url: str, dst_png: str, size: int = DISPLAY_SIZE) -> bool:
             return False
         if scale_to_png(tmp, dst_png, size):
             return True
-        # 转码失败但下载成功：至少把原图留下，界面会回退到首字母占位
         try:
             os.replace(tmp, os.path.splitext(dst_png)[0] + ".jpg")
         except OSError:

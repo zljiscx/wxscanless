@@ -21,12 +21,11 @@ import sys
 
 from . import file_md5
 
-CRYPT_KEY = b"xwechat_crypt_key"[:16]       # 实测有效
+CRYPT_KEY = b"xwechat_crypt_key"[:16]
 _HEAD = 4                                    # 主文件头长度
 _PRINTABLE = frozenset(range(32, 127))
 
 
-# ============================================================ AES-128（加密方向）
 def _rotl8(x: int, n: int) -> int:
     return ((x << n) | (x >> (8 - n))) & 0xFF
 
@@ -53,7 +52,6 @@ def _make_sbox() -> list:
 _SBOX = _make_sbox()
 _RCON = (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36)
 
-# 自检：S 盒生成错误会让整条解密链静默失效，宁可在导入时就炸掉。
 if not (_SBOX[0] == 0x63 and _SBOX[1] == 0x7C and _SBOX[0x53] == 0xED):
     raise RuntimeError("AES S-box 生成异常，请检查 mmkv._make_sbox 实现")
 
@@ -154,7 +152,6 @@ class AesCfb128:
         return out
 
 
-# ============================================================ MMKV payload 解析
 def _varint(buf: bytes, i: int) -> tuple:
     """读一个 varint，返回 (值, 新位置)；越界/超长返回 (-1, i)。"""
     r = 0
@@ -254,7 +251,7 @@ def decode(path: str) -> dict:
     best = None
     for name, iv, plain in cipher.decrypt_many(_iv_candidates(crc), body):
         start, ents, cov = _best_alignment(plain)
-        # 评分：可解析起点越靠前越好（正确 IV 能让首个条目也解出来）
+        # 评分：可解析起点越靠前越好
         score = (0 if ents else 1, start, -cov)
         if best is None or score < best[0]:
             best = (score, name, iv, plain, start, ents)
@@ -268,7 +265,6 @@ def decode(path: str) -> dict:
             "entries": ents, "coverage": _coverage(ents)}
 
 
-# ============================================================ 取值
 def val_bytes(v: bytes) -> bytes:
     """剥掉字符串值的内层长度前缀。"""
     if not v:
@@ -302,8 +298,6 @@ def as_dict(info: dict) -> dict:
 def summary(info: dict) -> dict:
     """抽出与登录态直接相关的关键字段。"""
     d = as_dict(info)
-    # ★ uin 必须按 **varint** 解码，不能按小端整数读：同一份字节序列
-    #   按两种读法会得到完全不同、相差数个数量级的结果（小端 u64 的读法是错的）。
     _raw_uin = val_bytes(d.get("ilink_current_uin", b""))
     _uin_dec, _ = _varint(_raw_uin, 0)
     return {
@@ -318,22 +312,19 @@ def summary(info: dict) -> dict:
         "push_login_expired": val_int(
             d.get("mmkv_key_push_login_url_expired_time", b"")),
         "has_auth_key": "mmkv_key_auto_auth_key" in d,
-        # 登录票据（auto_auth_key）的长度与指纹 —— 它是"能不能免扫码"的唯一
-        # 关键字段，且每次登录都会轮换。用它判断票据有没有换新，比整文件 md5
-        # 更精准：微信可能只改了个无关字段，票据其实没动。
+        # 登录票据（auto_auth_key）的长度与指纹，每次登录都会轮换
         "auth_len": len(d.get("mmkv_key_auto_auth_key", b"")),
         "auth_fp": hashlib.md5(
             d.get("mmkv_key_auto_auth_key", b"")).hexdigest()[:16],
         "server_id": val_str(d.get("mmkv_key_server_id", b"")),
         "pc_account_name": val_str(d.get("mmkv_key_pc_account_name", b"")),
-        # 该账号自己的头像 URL（显示在登录页/账号卡片上）。实测可下载。
+        # 头像 URL
         "head_img_url": val_str(d.get("mmkv_key_head_img_url", b"")),
         "entries": len(info["entries"]),
         "lost_head_bytes": info["lost_head"],
     }
 
 
-# ============================================================ 面向 watcher 的接口
 _probe_cache = {}      # 绝对路径 -> (md5, summary dict)
 
 
@@ -385,7 +376,6 @@ def forget_cache() -> None:
     _probe_cache.clear()
 
 
-# ============================================================ CLI
 def _fmt(name: str, info: dict) -> str:
     s = summary(info)
     tag = "有自动登录标记" if s["auto_login_flag"] else "无自动登录标记"
@@ -418,7 +408,7 @@ def default_targets() -> list:
                     raw = f.read()
             except OSError:
                 continue
-            # 该 ini 是 UTF-8（早期误用 gbk 会把"微信聊天记录"解成乱码）
+            # 该 ini 为 UTF-8
             for enc in ("utf-8-sig", "utf-8", "gbk"):
                 try:
                     root = raw.decode(enc).strip().strip("\x00").strip()
@@ -465,7 +455,7 @@ def main(argv) -> int:
     for p in targets:
         try:
             name = os.path.relpath(p, base)
-        except ValueError:              # 跨盘符（如 F:\ 数据根）
+        except ValueError:              # 跨盘符
             name = p
         try:
             info = decode(p)

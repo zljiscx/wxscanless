@@ -16,30 +16,16 @@ EXE_NAMES = ("Weixin.exe", "WeChat.exe")
 # 子进程携带 --type=<角色>，主进程没有
 SUB_TYPE_FLAG = "--type="
 
-# 轮询"新主进程出现"的粒度与上限（_main_pids() 单次约 22 ms，0.1 s 粒度足够）
+# 轮询新主进程出现的粒度与上限
 LAUNCH_POLL = 0.1
 LAUNCH_TIMEOUT = 20.0
 
-# 本程序是 GUI（--noconsole，自身没有控制台）。只要调用**控制台子程序**
-# （tasklist/cmd 等），Windows 就会为它新建控制台窗口，屏幕上便是"一闪而过的
-# 黑窗"。因此本模块只用 Win32 原生 API；此标志仅供将来不得不启动控制台子程序时兜底。
+# 启动控制台子程序时隐藏窗口（本模块只用 Win32 原生 API）
 CREATE_NO_WINDOW = 0x08000000
 
 
-# --------------------------------------------------------------------------
-# 进程枚举
-#
-# 主进程判据（按可靠性从高到低）：
-#   1) NtQueryInformationProcess 拿 PEB -> 读 CommandLine（最准）
-#   2) 命令行读不到就按父子关系判断：主进程的父进程不是微信，子进程的是主进程
-#   3) 都失败则退化为按进程名取全部同名进程
-# 不用 wmic（常被安全策略拉黑）与 tasklist（会闪控制台窗口）。
-# --------------------------------------------------------------------------
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
-
-# ★ 必须声明 argtypes/restype：不声明时 ctypes 按 C int 传参，64 位下句柄会被
-#   截断，API 静默失败（OpenProcess / CreateToolhelp32Snapshot 返回的都是 HANDLE）。
 _kernel32.OpenProcess.restype = ctypes.c_void_p
 _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 _kernel32.CloseHandle.restype = wintypes.BOOL
@@ -186,7 +172,7 @@ def _main_pids() -> set:
         mains = {pid for pid, cmd, _ppid in rows if cmd and SUB_TYPE_FLAG not in cmd}
         if mains:
             return mains
-        # 命令行读不到：主进程的父进程不是微信，子进程的父进程是主进程
+        # 命令行读不到时按父子关系判断
         wx = {pid for pid, _cmd, _ppid in rows}
         return {pid for pid, _cmd, ppid in rows if ppid not in wx}
     return _fallback_pids()
@@ -265,11 +251,8 @@ def launch(exe_path: str) -> list:
     if not os.path.isfile(exe_path):
         raise FileNotFoundError(exe_path)
     before = _main_pids()
-    # 先给整条进程树兜住 xweb_elf.dll 的搜索路径（详见 _ensure_xweb_dll_path）
     _ensure_xweb_dll_path()
     try:
-        # os.startfile 走 ShellExecute，等同资源管理器双击：进程由外壳托管，不会因为
-        # 调用方脚本退出而被回收（Popen 拉起的会被回收）。
         os.startfile(exe_path)
     except OSError:
         subprocess.Popen(
@@ -282,8 +265,6 @@ def launch(exe_path: str) -> list:
             stderr=subprocess.DEVNULL,
             close_fds=True,
         )
-    # 轮询"新主进程出现"。用**绝对时间轴**推进：把枚举自身的耗时（~22 ms）吸收进
-    # 等待里，保证周期真的等于 LAUNCH_POLL，而不是"POLL + 枚举耗时"。
     new = []
     end = time.time() + LAUNCH_TIMEOUT
     tick = time.time()

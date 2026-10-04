@@ -5,12 +5,6 @@
     ② 用 uin 定位槽位（含 monitordata_<uin>_<X> 的那个）
     ③ 采该槽位的 host\\ 整目录
     ④ 采 config 一对（global_config + .crc）
-
-★ 边界：
-  · 只认"登录成功"：monitordata_<uin> 是登录后才写的，停在登录页时微信会清掉它。
-  · config 只在归属自校验通过时落盘（解出的 wxid 与目标不符即拒绝），
-    且票据为空时不覆盖已有档案。
-  · 已收录的账号比对 host / config 指纹，变了才更新。
 """
 from __future__ import annotations
 
@@ -143,7 +137,6 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
                       created=_now())
     changed = []
 
-    # ---- config 对 ----
     live_fp = Vault.live_cfg_fingerprint(env.config_dir)
     if live_fp and live_fp != acc.config_fp:
         if not has_ticket and not is_new:
@@ -156,7 +149,6 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
             else:
                 log("  config 未保存：%s" % err)
 
-    # ---- host（用 uin 定位槽位） ----
     slot_name = locate_slot(env, vault, uin) if uin else ""
     if slot_name:
         digest = slot.fp_digest(slot.host_fingerprint(env, slot_name))
@@ -169,14 +161,12 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
     elif uin:
         res["detail"] = "当前没有槽位记录该账号（未登录成功），暂不采 host"
 
-    # ---- 头像 ----
     if want_avatar and url:
         png = vault.avatar_path(wxid)
         if is_new or not os.path.isfile(png):
             if avatar.save_avatar(avatar.normalize_url(url), png):
                 changed.append("avatar")
 
-    # ---- 元信息 ----
     if uin:
         acc.uin = uin
     if nick:

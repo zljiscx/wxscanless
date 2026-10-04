@@ -246,11 +246,6 @@ def detect() -> WeChatEnv:
     return env
 
 
-# --------------------------------------------------------------- XWeb 运行时
-# WeChatAppEx.exe 采用「存根 + 版本化负载」部署：xweb_elf.dll 是存根的静态导入，
-# 但**只存在于** <版本号>\extracted\runtime\ —— 工作目录不是它时，进程会以
-# 0xC0000135 直接死掉。故启动微信前把该目录**追加**到 PATH 末尾。
-# ★ 必须**追加末尾而非前置**：runtime\ 下有 ffmpeg.dll 等同名常见库，前置会顶掉别处版本。
 _XWEB_PLUGIN_ROOT = ("xplugin", "plugins", "RadiumWMPF")
 _XWEB_DLL = "xweb_elf.dll"
 
