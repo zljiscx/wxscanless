@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """登录：把一个已收录的账号免扫码登进主界面。
 
-流程（用户指定）：
+流程：
     0. 已在线的账号**不允许再次登录**
     1. 按"复用最小空闲槽位"算出本次实例会占用的 `net*` 槽位
     2. 收起已有实例的主窗口（否则新启动会被"转交"，不产生新进程）
@@ -136,10 +136,9 @@ def clean_temp(env) -> None:
 def _entered(env, pid: int, acc, target_slot: str) -> bool:
     """是否真的进了主界面（两条独立证据，任一成立）。
 
-    ★ 判据一律围绕**本实例的 pid**，**不能**用「主窗口总数 > base_main」：
-    登录过程中会把旧实例的窗口显示回来（`restore_windows`），总数判据会把
-    那些"复活"的窗口算成本次登录的成果 —— 2026-10-04 实测到的假成功就是
-    这么来的（第二个账号停在登录页，却报"已登录"）。
+    判据一律围绕**本实例的 pid**，**不能**用「主窗口总数 > base_main」：登录过程中
+    会把旧实例的窗口显示回来（`restore_windows`），总数判据会把那些"复活"的窗口
+    当成本次登录的成果（实测的假成功就是这么来的）。
     """
     try:
         if ui.main_window_of(pid) is not None:
@@ -158,9 +157,9 @@ def wait_entered(env, pid: int, acc, target_slot: str,
     while time.time() - t0 < timeout:
         if _entered(env, pid, acc, target_slot):
             return True
-        if process.main_pids() and pid not in process.main_pids():
-            # 实例已经没了：可能进程被回收/崩溃
-            log("  实例已退出，停止等待")
+        alive = process.main_pids()               # 一次枚举即可（约 22 ms）
+        if alive and pid not in alive:
+            log("  实例已退出，停止等待")           # 进程被回收/崩溃
             return False
         if time.time() - last > 15:
             last = time.time()
@@ -176,9 +175,8 @@ def _hide_existing(log) -> list:
     为什么非收不可：微信的"单实例转交"——已有实例的主窗口**可见**时，再启动
     微信会被转交给它而不产生新进程，多开就无从谈起。
 
-    ★ v1.4.3：收起方式由 `WM_CLOSE`（微信会置内部隐藏标记 → 窗口恢复后"点不动"）
-    改为 `SW_HIDE`（纯 Win32 可见性变化，微信无感，恢复后功能完好）。
-    见 `ui.hide_main_window` 的说明。
+    收起方式用 `SW_HIDE` 而非 `WM_CLOSE`（后者会让微信置内部隐藏标记，恢复后
+    "点不动"），详见 `ui.hide_main_window` 的说明。
     """
     out = []
     for p in process.main_pids_ordered():
@@ -283,7 +281,7 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
 
     def _launch_and_wait(timeout: float):
         """启动微信 → 等本实例的登录窗口（或它已直接进主界面）。返回 (pid, win)。"""
-        pids, _ = process.launch(env.exe_path)
+        pids = process.launch(env.exe_path)
         if not pids:
             return 0, None
         p = pids[0]
@@ -302,12 +300,10 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
 
     pid, win = _launch_and_wait(WINDOW_WAIT)
 
-    # 6.5) ★ 兜底：本实例迟迟不出现登录窗口 ⇒ 大概率是启动被"转交"给了旧实例，
-    #      说明"直接隐藏（SW_HIDE）"不足以让微信新建实例。此时**退回老做法**：
-    #      先把旧窗口显示出来，再走微信自己的"关闭到托盘"（WM_CLOSE），最后重启。
-    #      代价是那些旧窗口可能"点不动"（WM_CLOSE 的固有副作用，需用户手动点一下
-    #      标题栏最小化/最大化），但**保证多开不会失败**。
-    #      绝大多数情况下第一条路（SW_HIDE）就走通了，根本走不到这里。
+    # 6.5) 兜底：本实例迟迟不出现登录窗口 ⇒ 大概率是启动被"转交"给了旧实例，说明
+    #      直接隐藏不足以让微信新建实例。此时退回老做法：先把旧窗口显示出来，再走
+    #      微信自己的"关闭到托盘"（WM_CLOSE），最后重启。代价是那些旧窗口可能"点不动"
+    #      （需用户手动点一下标题栏按钮），但能保证多开不会失败。
     if hidden and (not pid or (win is None and ui.main_window_of(pid) is None)):
         log("  本实例 %.0f 秒内未出现登录窗口 —— 疑似被\"转交\"，"
             "改用老方式（WM_CLOSE）重试" % WINDOW_WAIT)
@@ -325,26 +321,17 @@ def login_account(env, vault, acc, log=print, hide_existing: bool = True,
     res["pid"] = pid
     log("  本次实例 pid=%s" % pid)
 
-    # 7.5) 新实例已经出现在登录页 ⇒ 微信的"单实例判定"早已完成，此刻把之前
-    #      收起的窗口显示回来是安全的（再早有可能被判为"已有实例"而被转交）。
-    #      这样用户只会看到旧窗口消失几秒，而不是一直躺在托盘里。
-    #
-    #      ★★ 代价（2026-10-04 踩到，务必记住）：这里显示回来的**旧实例主窗口**
-    #      会重新出现在 UIA 树里。所以下面每一处"是否进入主界面"的判定都必须
-    #      按 **pid** 认（见 _entered 与 ui.click_enter 的 appeared()），
-    #      **绝不能**用"主窗口总数变多了"。否则旧窗口一复活就会被当成本次登录
-    #      的成果：明明一次都没点「进入微信」，也会被判成功（账号其实没登进去）。
+    # 7.5) 新实例已出现在登录页 ⇒ 微信的"单实例判定"早已完成，此刻把之前收起的
+    #      窗口显示回来是安全的（再早有可能被判为"已有实例"而被转交）。
+    #      ★ 代价：旧实例主窗口会重新出现在 UIA 树里，所以下面每一处"是否进入主
+    #      界面"的判定都必须按 **pid** 认（见 _entered 与 ui.click_enter 的
+    #      appeared()），**绝不能**用"主窗口总数变多了"。
     restore_windows(hidden, log=log)
 
-    # 8) ★★ 用户要求：**「进入微信」一出现就点**，不额外等"稳定"。
-    #    整段交给 `ui.click_enter` 的 **ready 阶段**，最短路径如下：
-    #      · 轮询粒度 `POLL`=0.15 s（原来是 0.25 s sleep + 一次"限 600 节点整树
-    #        遍历"读状态，一轮下来 ≈0.3 s，且按钮只有遍历完才看得到）；
-    #      · 判"按钮在不在"用 `FindControl`，**命中即返回**（实测 ~16 ms）；
-    #      · 命中后**立刻发点击**，不再压着等 stable 稳定确认；
-    #      · 点完 0.5 s 没动静就**重发**（登录页刚画出来时坐标可能还没稳），
-    #        不再"点一次 → 等满 7 秒 → 才换下一招"。
-    #    二维码页（登录态失效）仍按"正向证据连续稳定 3 秒"判，不会误伤正常登录。
+    # 8) **「进入微信」一出现就点**，不额外等"稳定"：轮询粒度 POLL=0.15 s，判"按钮
+    #    在不在"用 FindControl（命中即返回，实测 ~16 ms），命中后立刻发点击，不再
+    #    "点一次 → 等满 7 秒 → 才换下一招"。二维码页（登录态失效）仍按"正向证据
+    #    连续稳定 3 秒"判，不会误伤正常登录。
     if win is not None:
         ok, method = ui.click_enter(win, wait=CLICK_WAIT, ready=ENTER_WAIT,
                                     poll=POLL, log=log, pid=pid)

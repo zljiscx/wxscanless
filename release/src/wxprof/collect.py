@@ -1,36 +1,34 @@
 # -*- coding: utf-8 -*-
 """采集：把"当前登录的账号"收进档案。
 
-链路（用户指定，已在实测中确认各环节）：
+链路：
     ① 读 live `global_config`
          · `mmkv_key_user_name`      → wxid
          · **varint**(`ilink_current_uin`) → uin
          · `mmkv_key_head_img_url`   → 头像 URL
          · `mmkv_key_nick_name`      → 昵称
-    ② 用 uin 定位槽位
-         · 哪个槽位的 `kvcomm\\monitordata_<uin>_<X>` 命中，账号就在哪个槽位
-         · 每槽位只有一个非零 uin ⇒ 不需要任何先验映射，全新账号同样成立
+    ② 用 uin 定位槽位（哪个槽位的 `kvcomm\\monitordata_<uin>_<X>` 命中，账号就在
+       哪个槽位；每槽位只有一个非零 uin，故不需要任何先验映射，全新账号同样成立）
     ③ 采该槽位的 `host\\` 整目录
     ④ config 一对（`global_config` + `.crc`）从 `all_users\\config` 采
 
-**更新判断**（用户要求）：已收录的账号比指纹 —— config 对内容变了 / host 目录变了
-才更新，没变就忽略（既不重复写盘，也不动档案）。
+**更新判断**：已收录的账号比指纹 —— config 对内容变了 / host 目录变了才更新，
+没变就忽略（既不重复写盘，也不动档案）。
 
 两条必须遵守的边界：
-    · **只认"登录成功"**：`monitordata_<uin>` 是登录后才写的；槽位刚启动（停在登录页）
-      时它会被微信清掉。所以 uin 定位不到槽位时不采 host，只登记账号。
-    · **config 只在它确实属于该账号时采**：多实例在线时 live config 只反映
-      "最后一个写入者"，拿它去覆盖别的账号的档案就是串档。这里用 `owner` 自校验，
-      解出的 wxid 与目标不符就拒绝落盘。且**没有票据时不覆盖已有档案**
-      （微信会把票据短暂移出配置，此刻采到的是空配置）。
+    · **只认"登录成功"**：`monitordata_<uin>` 是登录后才写的；槽位刚启动（停在
+      登录页）时它会被微信清掉。所以 uin 定位不到槽位时不采 host，只登记账号。
+    · **config 只在它确实属于该账号时采**：多实例在线时 live config 只反映"最后
+      一个写入者"，拿它去覆盖别的账号的档案就是串档。这里用归属自校验，解出的
+      wxid 与目标不符就拒绝落盘。且**没有票据时不覆盖已有档案**（微信会把票据短
+      暂移出配置，此刻采到的是空配置）。
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import time
 
-from . import avatar, mmkv, slot
+from . import avatar, file_md5, mmkv, slot
 from .vault import Account, Vault
 
 
@@ -45,14 +43,6 @@ def live_summary(env) -> dict:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _md5(path: str) -> str:
-    try:
-        with open(path, "rb") as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except OSError:
-        return ""
 
 
 def locate_slot(env, vault, uin: int) -> str:
@@ -71,14 +61,14 @@ def locate_slot(env, vault, uin: int) -> str:
     acc = vault.by_uin(uin) if vault else None
     if acc is None or not vault.has_host(acc.wxid):
         return ""
-    want = _md5(os.path.join(vault.host_dir(acc.wxid), "host-redirect.xml"))
+    want = file_md5(os.path.join(vault.host_dir(acc.wxid), "host-redirect.xml"))
     if not want:
         return ""
     for name in slot.INSTANCE_DIRS:
         if not slot.slot_busy(env, name):
             continue
         p = os.path.join(slot.slot_dir(env, name), "host", "host-redirect.xml")
-        if _md5(p) == want:
+        if file_md5(p) == want:
             return name
     return ""
 
@@ -97,11 +87,10 @@ def online_accounts(env, vault, live: dict = None) -> dict:
     """当前**已登录**的账号：{wxid: 槽位}。每个槽位最多产出一个账号。
 
     判据 = 槽位被占用（config.ini 独占句柄）**且** `current_uin()` 能给出当前账号
-    （= 登录成功且非历史残留）。停登录页的实例只有前者，不算在线。
+    （= 登录成功且非历史残留）。停在登录页的实例只有前者，不算在线。
 
-    ⚠️ 不能遍历 `monitordata_uins()`：微信**从不清理**旧的 `monitordata_<uin>`，
-    一个槽位会累积多个历史账号（实测 net / net_1 都各有 2 个），那样会把已退出的
-    账号一直报成在线 —— 正是"退出一个后界面仍显示两个在线"的根因。
+    ⚠️ 不能遍历 `monitordata_uins()`：微信从不清理旧的 `monitordata_<uin>`，一个
+    槽位会累积多个历史账号，那样会把已退出的账号一直报成在线。
     """
     if live is None:
         live = live_summary(env)

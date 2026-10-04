@@ -6,12 +6,11 @@
     2. 槽位里的账号     —— `kvcomm\\monitordata_<uin>`（登录成功后才写）
     3. live `global_config` —— 当前这份配置属于谁、票据还在不在
 
-采集规则（对应用户要求）：
-    · **已收录**：按链路定位到该账号所在槽位，比对 host 指纹 / config 指纹，
-      **变了才更新，没变就忽略**；
+采集规则：
+    · **已收录**：定位到该账号所在槽位，比对 host 指纹 / config 指纹，变了才更新；
     · **未收录**：立即建档（config 对 + host + 头像 + 元信息）；
-    · 多实例在线时，只有 live config 的归属账号能采 config 与头像；
-      其它在线账号只刷新自己的 host（host 分槽位存放，不会串档）。
+    · 多实例在线时，只有 live config 的归属账号能采 config 与头像，其它在线账号
+      只刷新自己的 host（host 分槽位存放，不会串档）。
 
 为什么"登录页"不算登录成功：实例一启动（停在登录页）微信就会把该槽位的
 `monitordata_<uin>` 清掉，只留 `monitordata_0`。所以只有 `monitordata_<uin>`

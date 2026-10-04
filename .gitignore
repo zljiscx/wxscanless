@@ -11,6 +11,9 @@
 !/release/**
 !/launcher.py
 !/requirements.txt
+!/README.md
+!/LICENSE
+!/THIRD_PARTY_NOTICES.md
 !/.gitignore
 !/.gitattributes
 

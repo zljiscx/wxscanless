@@ -2,32 +2,21 @@
 """实例槽位：占用判据、目标槽位、host 读写、monitordata 扫描。
 
 微信 4.x 的运行时目录是 `%APPDATA%\\Tencent\\xwechat\\net` / `net_1` / `net_2` /
-`net_3`（最多 4 个实例），每个实例占一个。本模块只回答四件事：
+`net_3`（最多 4 个实例），每个实例占一个。本模块回答四件事：
 
-1. **哪个槽位被占用** —— 实测（2026-10-03，4/4 吻合）：微信对
-   `<槽位>\\config.ini` 持有 **share=0 的独占句柄**；只要有任何其它句柄打开着它，
-   我们的独占打开就会失败。于是：
-       独占打开成功 ⇒ 无实例占用（空闲）
-       独占打开失败 ⇒ 有实例正持有（占用）
-   这是**只读**操作（打开句柄再关闭，不写、不改名、不删）。
-   ⚠️ 对**槽位目录**做同样的事无效（`net_1` 恒"占用"，是系统后台进程持着目录句柄）；
-   枚举 `\\BaseNamedObjects` 也看不到微信的槽位对象。**唯一可用判据就是 config.ini。**
-
-2. **新实例会落在哪个槽位** —— 实测：**复用最小空闲槽位**。
-   0 实例→`net`；1 实例→`net_1`；关掉 `net_1` 上的实例后再启动→**回到 `net_1`**
-   （`net_2` 不会因此被创建）。所以目标槽位 = 下标最小的空闲槽位。
-
-3. **槽位当前住着谁** —— `<槽位>\\kvcomm\\monitordata_<uin>_<X>`：
-   每个槽位**只有一个非零 uin**，就是当前登录账号。
-   ⚠️ 该文件在**登录成功后**才写入；实例一启动（停在登录页）微信就会把它清掉。
-
+1. **哪个槽位被占用** —— 微信对 `<槽位>\\config.ini` 持有 share=0 的独占句柄，
+   我们的独占打开失败即说明有实例正持有：
+       独占打开成功 ⇒ 空闲；失败 ⇒ 占用
+   这是**只读**操作。对**槽位目录**做同样的事无效（`net_1` 恒"占用"）。
+2. **新实例落在哪个槽位** —— 复用**下标最小的空闲槽位**。
+3. **槽位当前住着谁** —— `<槽位>\\kvcomm\\monitordata_<uin>_<X>`；该文件在登录
+   成功后才写入，停在登录页时微信会把它清掉。
 4. **host 目录读写** —— `<槽位>\\host\\`，账号级网络路由文件，需在实例启动前就位。
-
-完整实测记录见 _docs/项目实现与实测结论.md 第五节。
 """
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import re
 import shutil
@@ -275,8 +264,6 @@ def fp_digest(fp: dict) -> str:
     """把 {相对路径: md5} 压成一个指纹串（用于"变没变"的比较）。"""
     if not fp:
         return ""
-    import hashlib
-
     joined = "|".join("%s=%s" % (k, fp[k]) for k in sorted(fp))
     return hashlib.md5(joined.encode("utf-8")).hexdigest()
 
@@ -286,8 +273,6 @@ def host_fingerprint_of(host_path: str) -> dict:
 
     槽位与档案里的 host 目录结构相同，同一个函数通用。
     """
-    import hashlib
-
     out = {}
     if not os.path.isdir(host_path):
         return out

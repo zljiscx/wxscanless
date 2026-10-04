@@ -1,36 +1,24 @@
 # -*- coding: utf-8 -*-
 """MMKV 解密与解析（纯 Python，无第三方依赖）。
 
-背景（本机实测确认，2026-10-02）：
-    微信 4.x 把"这次该登录哪个账号"记在
-        <数据根>\\xwechat_files\\all_users\\config\\global_config  (+ .crc)
-    这是一个 MMKV 文件，AES-128-CFB 加密。
+微信 4.x 把"这次该登录哪个账号"记在
+    <数据根>\\xwechat_files\\all_users\\config\\global_config  (+ .crc)
+这是一个 AES-128-CFB 加密的 MMKV 文件。本模块的要点：
 
-    · 密钥 = Weixin.dll 里的明文常量 "xwechat_crypt_key" 的前 16 字节。
-      此前 mmkv_decrypt.py（开发期诊断脚本，已删）穷举 6912 种 key/iv/模式组合
-      全部失败，唯一原因就是从没试过这个常量。
-    · 主文件布局：[4 字节头][密文 payload][0x00 填充]
-      .crc 布局：crc32(4) | version(4) | sequence(4) | iv(16) | actualSize(4) | ...
-    · payload 是 MMKV 的迷你 protobuf 序列：
-          循环 { keyLen(varint) key valueLen(varint) value }
-      字符串型 value 内部再套一层长度前缀。
-    · CFB 是链式的，但**只有第一个分组受 IV 影响**：
-          第 i 个明文块 P_i = C_i XOR E(K, C_{i-1})
-      其中 C_{i-1} 是磁盘上的密文，与 IV 无关。所以本模块对所有候选 IV
-      只重算第一块，其余复用同一条密文链。
+· 密钥 = Weixin.dll 里的明文常量 "xwechat_crypt_key" 的前 16 字节。
+· 主文件布局：[4 字节头][密文 payload][0x00 填充]
+  .crc 布局：crc32(4) | version(4) | sequence(4) | iv(16) | actualSize(4) | ...
+· payload 是 MMKV 的迷你 protobuf 序列：循环 { keyLen key valueLen value }，
+  字符串型 value 内部再套一层长度前缀。
+· CFB 是链式的，但**只有第一个分组受 IV 影响**，所以对所有候选 IV 只重算第一块。
 
-为什么自带 AES 而不依赖 pycryptodome：
-    项目运行环境是系统 Python 3.11，其中没有 pycryptodome；而且本工具要求
-    兼容 Windows 7，第三方依赖越少越好。这里实现 AES-128 的加密方向即可
-    ——CFB 解密用到的就是分组密码的加密方向。
+自带 AES 而不依赖 pycryptodome：运行环境是系统Python 3.11 且要求兼容 Win7，
+第三方依赖越少越好；CFB 解密只用分组密码的加密方向。
 
-用途：
-    1. 读出某个 global_config 到底属于哪个账号（wxid / 昵称 / uin），
-       用于**快照自校验**，避免串档（这是历史上一再踩坑的地方）。
-    2. 供 watcher 判断"磁盘上这份配置归谁"，从而实现自动保存登录态。
+用途：读出某个 global_config 属于哪个账号（wxid / 昵称 / uin），用于**快照自校验**
+避免串档，并供 watcher 判断"磁盘上这份配置归谁"。
 
-用法：
-    python -m wxprof.mmkv [--key] [路径...]
+用法：python -m wxprof.mmkv [--key] [路径...]
 """
 from __future__ import annotations
 
@@ -38,6 +26,8 @@ import hashlib
 import os
 import struct
 import sys
+
+from . import file_md5
 
 CRYPT_KEY = b"xwechat_crypt_key"[:16]       # 实测有效
 _HEAD = 4                                    # 主文件头长度
@@ -357,13 +347,11 @@ _probe_cache = {}      # 绝对路径 -> (md5, summary dict)
 
 
 def fingerprint(path: str) -> str:
-    """文件内容 md5。MMKV 是内存映射文件，写完不一定更新 mtime，
-    所以判断"变没变"必须看内容，不能看时间。"""
-    try:
-        with open(path, "rb") as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except OSError:
-        return ""
+    """文件内容 md5。
+
+    MMKV 是内存映射文件，写完不一定更新 mtime，所以判断"变没变"必须看内容。
+    """
+    return file_md5(path)
 
 
 def probe(path: str) -> dict:
@@ -439,8 +427,7 @@ def default_targets() -> list:
                     raw = f.read()
             except OSError:
                 continue
-            # 实测（2026-10-02）：该 ini 是 UTF-8；早期误用 gbk 会把
-            # "微信聊天记录" 解成 "寰?淇¤亰澶╄?板綍"。
+            # 该 ini 是 UTF-8（早期误用 gbk 会把"微信聊天记录"解成乱码）
             for enc in ("utf-8-sig", "utf-8", "gbk"):
                 try:
                     root = raw.decode(enc).strip().strip("\x00").strip()

@@ -1,44 +1,34 @@
 # -*- coding: utf-8 -*-
 """微信多账号免扫码登录器 v1.5.1 —— 图形界面（Windows 7/10/11，微信 4.x）。
 
-**启动（v1.5.0）**：窗口**先出现**（右下状态行提示"正在加载运行环境…（此过程
-不能登录账号）"，登录按钮置灰），UIA 自检 / 环境探测 / 监控启动在这之后由后台
-线程补上，完成后状态行变"已就绪"、按钮恢复。配合文件夹版打包（`--onedir`，
-免去每次启动 4.5 秒的解压），实测"双击 → 界面可见"由 8.8~10.3 秒降到 1.0~1.2 秒，
-"→ 已就绪"约 1.9 秒。
+**启动**：窗口**先出现**（状态行提示"正在加载运行环境…（此过程不能登录账号）"，
+登录按钮置灰），UIA 自检 / 环境探测 / 监控启动由后台线程补上，完成后状态行变
+"已就绪"、按钮恢复 —— 用户看到的是"秒开 + 转瞬就绪"。
 
-界面形态：**窄而长**的竖条启动器，**窗口大小固定**（360 宽，`resizable(False, False)`，
-不允许拉伸；位置仍可任意拖动）。每个账号一张卡片（头像 1:1 完整显示），
-只有两个操作 —— **登录** / **删除**；另有一个全局「一键登录」，
-自动登录所有已收录且未在线的账号，已在线自动跳过。
-账号多到一屏放不下时，列表带垂直滚动条，并支持鼠标滚轮翻看。
+界面形态：**窄而长**的竖条启动器，**窗口大小固定**（360 宽，不可拉伸；位置可
+任意拖动）。每个账号一张卡片，只有两个操作 —— **登录** / **删除**；另有一个全局
+「一键登录」，自动登录所有已收录且未在线的账号。账号多到一屏放不下时列表带垂直
+滚动条，并支持鼠标滚轮翻看。
 
 卡片状态**一眼可辨**：头像**在线彩色 / 离线灰**（灰度副本按需生成后落盘复用）、
-**昵称在线绿+加粗 / 离线灰+常规**，配合状态行的「在线 · 槽位 net*」/「离线 · 可一键登录」。
-昵称自动换行、**最多两行**（超出用省略号收尾）；**每张卡片高度固定**（= 两行昵称的
-高度），所以一行昵称与两行昵称的卡片高度完全一致，列表看起来是整齐的（用户要求）。
+昵称**在线绿+加粗 / 离线灰+常规**；昵称自动换行、最多两行，且**每张卡片高度固定**
+（= 两行昵称的高度），列表看起来整齐一致。
 
-**窗口内任意位置**按住鼠标左键即可拖动整个窗口（不限于标题栏）。
-
-**贴边隐藏**（类似旧版 QQ，**只对屏幕右边缘生效**）：把窗口拖到屏幕右边，
-窗口自动缩进、只在屏边留一条细缝；鼠标靠近细缝自动滑出，鼠标移开后延时收回。
-拖离右边缘即自动解除。
+**窗口内任意位置**按住鼠标左键即可拖动整个窗口。**贴边隐藏**（类似旧版 QQ，
+**只对屏幕右边缘生效**）：拖到屏幕右边自动缩进、只在屏边留一条细缝，鼠标靠近
+细缝自动滑出，移开后延时收回；拖离右边缘即自动解除。
 
 三件事都在后台完成，不受前台鼠标键盘与其它窗口影响：
     · 监控：发现微信登录成功 → 立刻按链路采集/更新该账号的登录态；
     · 登录：热替换 `global_config`+.crc → 把 host 铺进目标 `net*` 槽位 → 启动实例
-            → 后台点「进入微信」→ 后台判定进入主界面；
-            期间已登录实例的窗口会**短暂收进托盘**（微信单实例转交机制所迫），
-            新实例一出现在登录页就**立刻原样显示回来**（login.restore_windows）；
+            → 后台点「进入微信」→ 后台判定进入主界面；期间已登录实例的窗口会
+            **短暂收进托盘**（微信单实例转交机制所迫），新实例一出现在登录页就
+            **立刻原样显示回来**；
     · 采集链路：读 config → varint 解 `ilink_current_uin` → 定位含
             `monitordata_<uin>` 的槽位 → 采该槽位 `host\\`。
 
-原理与实测记录见 _docs/项目实现与实测结论.md（项目唯一文档）。
-
----
-
-**本文件属于外置代码区 `release\\`**：与 `src\\`（业务模块）、`ext\\`（第三方依赖）
-同级。更新功能时**只需替换本目录的内容**，无需重新打包 exe。
+本文件属于外置代码区 `release\\`：与 `src\\`（业务模块）、`ext\\`（第三方依赖）同级。
+更新功能时**只需替换本目录的内容**，无需重新打包 exe。
 """
 from __future__ import annotations
 
@@ -52,18 +42,13 @@ import tkinter.font as tkfont
 from tkinter import messagebox
 
 # --- 运行根 -------------------------------------------------------------
-# 本文件位于**外置代码区** release\ 内，因此 __file__ 始终是真实磁盘路径 ——
-# 即便程序被打包成单文件 exe 也成立（它本来就是外部文件，不会落进解压目录）。
+# 本文件位于**外置代码区** release\ 内，因此 __file__ 始终是真实磁盘路径。
 #
 #   RELEASE_DIR = release\ 目录           业务模块与第三方依赖都在这里
-#   ROOT        = 程序根（exe 同级目录）   data\ 与 logs\ 的父目录，**不随代码替换而变动**
+#   ROOT        = 程序根（exe 同级目录）   data\ 与 logs\ 的父目录
 #
 # ROOT 由启动器通过环境变量注入；直接运行本文件时（开发调试）回退为上一级目录。
 # 根目录只留启动器与 exe：运行数据一律进子目录（data\ 账号档案、logs\ 日志）。
-#
-# 目录命名约定：**生产环境不需要的子目录一律以 `_` 前缀**（_tools\ _docs\ _probe\），
-# 不带前缀的目录（release\ data\ logs\ runtime\）都是生产运行必需；虚拟环境 .venv\ 不受此
-# 约束。新增开发用目录时按此命名，便于一眼区分。
 RELEASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("WXPROF_ROOT") or os.path.dirname(RELEASE_DIR)
 DATA_DIR = os.path.join(ROOT, "data")
@@ -72,18 +57,18 @@ LOG_PATH = os.path.join(ROOT, "logs", "wechat_launcher.log")
 
 # --- 启动阶段彻底消除"闪黑窗" -----------------------------------------
 # 本程序是 GUI（打包为 --noconsole，自身没有控制台）。只要有任何一处通过
-# subprocess/os.popen 执行**控制台程序**，Windows 就会给它新建一个控制台窗口
+# subprocess 执行**控制台程序**，Windows 就会给它新建一个控制台窗口
 # —— 屏幕上一闪而过的"CMD 黑窗"就是这么来的。
 #
-# 实测定位到的触发点：打包（frozen）环境下，标准库 `platform` 会走到
-# `_syscmd_ver()`，其实现是 `subprocess.check_output('ver', shell=True)`，
-# 也就是执行 `cmd.exe /c ver` —— 只为取一个系统版本号，却弹出一个控制台窗口。
+# 实测定位到的触发点：打包（frozen）环境下标准库 `platform` 会走到 `_syscmd_ver()`，
+# 其实现是 `subprocess.check_output('ver', shell=True)`，也就是执行 `cmd.exe /c ver`
+# —— 只为取一个系统版本号，却弹出一个控制台窗口。
 #
 # 两层处理（都必须在本模块其它 import/逻辑之前完成，否则同一条导入链上已经
 # 发生的调用就漏掉了）：
 #   ① 精准：把 `platform._syscmd_ver` 换成不执行外部命令的实现，版本号改从
 #      `sys.getwindowsversion()` 取（同一信息源，格式与 `ver` 输出一致）；
-#   ② 兜底：包装 `subprocess.Popen`，凡控制台子进程一律附加 CREATE_NO_WINDOW，
+#   ② 兜底：包装 `subprocess.Popen`，凡子进程一律附加 CREATE_NO_WINDOW，
 #      今后无论哪个依赖再调外部命令，都不会再闪窗。
 CREATE_NO_WINDOW = 0x08000000
 
@@ -162,9 +147,9 @@ for _p in (os.path.join(RELEASE_DIR, "ext"),      # 第三方依赖（外置，�
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-from wxprof import collect, login, paths, process, slot, ui, vault, watcher  # noqa: E402
-from wxprof import __version__                                              # noqa: E402
-from wxprof import avatar as avatar_mod                                     # noqa: E402
+from wxprof import login, paths, process, slot, ui, vault, watcher     # noqa: E402
+from wxprof import __version__                                          # noqa: E402
+from wxprof import avatar as avatar_mod                                 # noqa: E402
 
 # --- 运行日志与崩溃兜底 -------------------------------------------------
 # 打包成 exe（--noconsole）后没有控制台，print 与未捕获异常都会无声消失，
@@ -415,9 +400,8 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         # ★ 立刻隐藏窗口：Tk 的 root 窗口**一被创建就以默认尺寸显示**（实测
-        # 216x239，位置在屏幕中部），直到下面 self.geometry(...) 生效才变成
-        # 400x760 并移到屏幕右侧 —— 中间那一帧就是用户看到的"一闪就没的小窗口"。
-        # 先 withdraw()，等界面全部构建完成后再 deiconify()，彻底消除这个闪烁。
+        # 216x239，位置在屏幕中部），直到下面 self.geometry(...) 生效才变成目标
+        # 尺寸并移到屏幕右侧 —— 中间那一帧就是用户看到的"一闪就没的小窗口"。
         self.withdraw()
         self._busy = False
         self._booting = True                    # ★ 启动加载中：登录按钮此时不可用
@@ -475,14 +459,13 @@ class App(tk.Tk):
         self.after(500, self._poll_show_event)  # 接收"第二个实例"的唤醒请求
 
     # ------------------------------------------------- 启动加载（窗口显示后）
-    # ★ 为什么值得单独一层：启动期最贵的三件事（UIA 自检 / 环境探测 / 启监控）
-    #   合计约 1.3 秒，此前全部挡在窗口出现之前。现在窗口先出来（状态行写明
-    #   "正在加载运行环境"、登录按钮置灰），重活挪到窗口显示之后的后台线程，
-    #   完成后自动把状态改成"已就绪"并恢复按钮 —— 用户看到的是"秒开 + 转瞬就绪"。
-    @property
-    def _locked(self) -> bool:
-        """界面当前是否"不可操作"：启动加载中，或正在执行登录任务。"""
-        return self._busy or self._booting
+        # 启动期最贵的三件事（UIA 自检 / 环境探测 / 启监控）合计约 1.3 秒，若放在窗口
+        # 出现之前，窗口就得等它们全部做完才显示。现在窗口先出来（状态行写明"正在加载
+        # 运行环境"、登录按钮置灰），重活挪到后台线程，完成后自动改成"已就绪"并恢复按钮。
+        @property
+        def _locked(self) -> bool:
+            """界面当前是否"不可操作"：启动加载中，或正在执行登录任务。"""
+            return self._busy or self._booting
 
     def _boot(self) -> None:
         """窗口已经在屏幕上了，才开始加载运行环境（后台线程，不卡界面）。"""
@@ -590,11 +573,9 @@ class App(tk.Tk):
         self.list = tk.Frame(wrap, bg=BG)
         self.list.pack(fill="both", expand=True, pady=(6, 0))
 
-        # ★ 滚动条**必须先 pack**（pack 是"先到先分配"）：
-        # tk.Canvas 的默认请求宽度是 378px，比本窗口可用的 368px（400-16*2）还宽；
-        # 原先先 pack canvas 且它 expand=True，于是 canvas 把全部宽度吃掉，
-        # 滚动条只分到 0px —— 看起来就是"滚动条被截掉了"，把窗口拉宽才露出来。
-        # 同时给 canvas 一个小的显式宽度，不再依赖它的默认请求宽度。
+        # ★ 滚动条**必须先 pack**（pack 是"先到先分配"）：canvas 的默认请求宽度比
+        # 本窗口可用宽度还宽，先 pack 它会把全部宽度吃掉，滚动条只分到 0px。
+        # 同时给 canvas 一个小的显式宽度，不依赖它的默认请求宽度。
         canvas = tk.Canvas(self.list, bg=BG, highlightthickness=0, width=1)
         sb = ThinScrollbar(self.list, command=canvas.yview)
         self.inner = tk.Frame(canvas, bg=BG)
@@ -629,9 +610,9 @@ class App(tk.Tk):
                                  font=("Microsoft YaHei UI", 10, "bold"),
                                  highlightbackground=ACCENT, highlightthickness=1)
         self.btn_all.pack(side="left", fill="x", expand=True)
-        # ★ 立即按"忙/加载中"置一次灰：`_tick` 要等 POLL_MS 才跑第一轮，而
-        #   启动加载期间 `_update_status` 又会因 env 还是 None 直接返回 ——
-        #   不在这里显式设一次，'一键登录' 在加载阶段会显示成可点的绿色。
+        # ★ 立即按"忙/加载中"置一次灰：`_tick` 要等 POLL_MS 才跑第一轮，启动加载期间
+        #   `_update_status` 又会因 env 还是 None 直接返回 —— 不显式设一次，
+        #   「一键登录」在加载阶段会显示成可点的绿色。
         self.btn_all._primary, self.btn_all._danger = True, False
         self._set_btn(self.btn_all, True)
         tk.Button(box, text="刷新", command=self.refresh, relief="flat", padx=14,
@@ -679,10 +660,8 @@ class App(tk.Tk):
             tk.Label(empty, text="还没有账号", bg=CARD, fg=TEXT,
                      font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w",
                                                                    padx=14, pady=(12, 2))
-            # ★ 这行提示**不做手工换行**：原来按窗口 400px 宽用 `\n` 硬断行，
-            # 窗口收到 360 之后第一行就超出可用宽度、**两端被截掉**（用户实测反馈）。
-            # 改由提示 Label 自身的 <Configure> 回填实际宽度自动折行，
-            # 以后再改窗口宽度也不会断错位置。
+            # ★ 这行提示**不做手工换行**（按固定像素 `\n` 断行会随窗口宽度被截断），
+            # 改由提示 Label 自身的 <Configure> 回填实际宽度自动折行。
             tip = tk.Label(empty,
                            text="直接用微信登录一个账号即可 —— 后台监控会自动把它"
                                 "收进档案（config + host + 头像），之后就能一键免扫码登录。",
@@ -765,16 +744,15 @@ class App(tk.Tk):
         return cv
 
     def _row(self, acc) -> None:
-        # ★ 卡片高度**固定**（用户要求）：一行昵称的卡片不许比两行昵称的矮。
-        #   用 pack_propagate(False) 关掉"按内容自适应高度" —— 否则子控件
-        #   （头像 88、文字块）会把卡片各自撑到不同高度（实测 114 vs 118）。
+        # ★ 卡片高度**固定**：用 pack_propagate(False) 关掉"按内容自适应高度" ——
+        #   否则子控件会把卡片各自撑到不同高度（一行昵称 114 vs 两行 118）。
         row = tk.Frame(self.inner, bg=CARD, highlightthickness=1,
                        highlightbackground=LINE, height=CARD_H)
         row.pack(fill="x", pady=4)
         row.pack_propagate(False)
 
-        # 头像（左）：按**当前**在线状态直接画对（离线灰/在线彩），
-        # 免得先画彩色再被下个刷新周期改成灰，白白闪一下。
+        # 头像（左）：按**当前**在线状态直接画对（离线灰/在线彩），免得先画彩色
+        # 再被下个刷新周期改成灰，白白闪一下。
         on_now = acc.wxid in self._status_online()
         cv = self._avatar(row, acc, on_now)
         cv.pack(side="left", padx=(12, 10), pady=12)
@@ -787,15 +765,13 @@ class App(tk.Tk):
         b_del = self._btn(right, "删除", lambda a=acc: self.on_delete(a),
                           danger=True)
 
-        # 文字（中间，占剩余宽度）。
-        # 用 fill="x" 而**不** fill="y"：高度由内容决定，pack 会把文字块在卡片里
-        # 垂直居中 —— 一行昵称时不会顶在上边、下边留一大块空白。
+        # 文字（中间，占剩余宽度）。用 fill="x" 而**不** fill="y"：高度由内容决定，
+        # pack 会把文字块在卡片里垂直居中 —— 一行昵称时不会顶在上边。
         mid = tk.Frame(row, bg=CARD)
         mid.pack(side="left", fill="x", expand=True, pady=12)
-        # 昵称：**在线绿+加粗 / 离线灰+常规**（与头像灰度同一套在线判据；建卡时直接画对）。
-        # 自动折行、**最多两行**（卡片高度是固定的，第三行会被裁）；换行宽度不写死
-        # 像素，由 mid 的 <Configure> 把实际宽度回填给 Label，字体度量或布局微调
-        # 都不会让换行点跑偏。
+        # 昵称：**在线绿+加粗 / 离线灰+常规**（与头像同一套在线判据，建卡时直接画对）。
+        # 自动折行、最多两行（卡片高度固定，第三行会被裁）；换行宽度不写死像素，
+        # 由 mid 的 <Configure> 回填实际宽度。
         nick_fg = ACCENT if on_now else SUB
         nick_full = acc.nickname or acc.name or acc.wxid
         lbl_nick = tk.Label(mid, text=nick_full, bg=CARD, fg=nick_fg,
@@ -897,7 +873,8 @@ class App(tk.Tk):
             return
         online = self._status_online()
         n = int(self.watcher.status.get("instances", 0)) if self.watcher else 0
-        titles = {a.wxid: (a.nickname or a.wxid) for a in self.vault.list_accounts()}
+        accs = self.vault.list_accounts()          # 每轮只读一次档案目录
+        titles = {a.wxid: (a.nickname or a.wxid) for a in accs}
         names = [titles.get(w, short(w, 8)) for w in online]
         if self.env.ok:
             self.var_env.set("微信 %s · %d 个实例 · %s"
@@ -938,7 +915,7 @@ class App(tk.Tk):
         # 「一键登录」只要还有"未在线且登录态齐备"的账号就可点。
         # 判据必须与 on_login_all 里的 todo 一致，否则按钮状态与点击结果会打架。
         can_all = any((a.wxid not in online) and self.vault.ready(a.wxid)
-                      for a in self.vault.list_accounts())
+                      for a in accs)
         locked = self._locked
         self.btn_all.config(state=tk.NORMAL if (can_all and not locked)
                             else tk.DISABLED,
@@ -1152,26 +1129,24 @@ class App(tk.Tk):
         self._update_status()
 
         def job():
+            err = ""
             try:
                 work()
             except Exception as e:              # noqa: BLE001
-                self.after(0, lambda: self._set("出错了：%s" % e))
+                err = "出错了：%s" % e
+                log_line("任务异常：%r" % (e,))
             finally:
                 if self.watcher:
                     self.watcher.resume()
-            self.after(0, lambda: self._finish())
+            self.after(0, lambda: self._finish(err))
         threading.Thread(target=job, daemon=True).start()
 
     # -------------------------------------------------------------- 登录
     def _log_login(self, text: str) -> None:
         """登录过程的日志**同时**落日志文件与界面状态行。
 
-        以前只写界面（`log=self._set`），用户事后反馈"登录出问题"时，日志文件里
-        一个字都没有，只能靠猜 —— 2026-10-04 排查"第二个账号不点「进入微信」"
-        就吃了这个亏。login 模块每一步都有 log，落盘后能直接看出卡在哪一步。
-
-        本方法在**后台线程**被调用 ⇒ 界面更新一律 `after` 回主线程，
-        不直接碰 Tk（`var_status.set` + `update_idletasks` 跨线程并不安全）。
+        login 模块每一步都有 log，落盘后用户反馈"登录出问题"时能直接看出卡在哪
+        一步。本方法在**后台线程**被调用 ⇒ 界面更新一律 `after` 回主线程。
         """
         try:
             log_line("[登录] %s" % str(text).strip())
@@ -1326,17 +1301,12 @@ def _preflight() -> bool:
     """启动自检：UI 自动化不可用时返回 False（**只检测 + 落日志，不弹窗**）。
 
     `ui.available()` 为假（import uiautomation 失败）时，登录窗口/主界面的探测会
-    **静默返回空**，表现为"看不到微信、点了没反应"。最常见的根因是**解释器不对**：
-    uiautomation 只装在 Python 3.11。
-
-    ★ 行为变化（v1.5.0）：本函数不再在 `main()` 里启动前调用，而是由界面在
-    **窗口显示出来之后**于后台线程里调用 —— 因为它是启动期最贵的一步
-    （`import uiautomation` 0.56 s + 首次 UIA 调用约 0.3 s）。
-    弹窗不在这里做：本函数可能跑在后台线程，而 tkinter 的对话框只能在主线程
-    弹 ⇒ 由主线程拿到返回值后再调 `_warn_no_uia()`。
+    **静默返回空**，表现为"看不到微信、点了没反应"。弹窗不在这里做：本函数跑在
+    后台线程（tkinter 对话框只能在主线程弹），由主线程拿到返回值后调
+    `_warn_no_uia()`。
     """
     with ui.ui_scope():     # ① 让"延迟导入 uiautomation"发生在**已 CoInitialize** 的线程里
-                            # ② uiautomation 在非主线程必须先初始化，否则 UIA 调用静默失败
+                           # ② uiautomation 在非主线程必须先初始化，否则 UIA 调用静默失败
         ok = ui.available()
         log_line("启动自检：frozen=%s  解释器=Python %s  uiautomation导入=%s"
                  % (bool(getattr(sys, "frozen", False)),
@@ -1345,10 +1315,8 @@ def _preflight() -> bool:
             # 导入成功 ≠ 真的能用：uiautomation 在**首次调用**时才执行
             # comtypes.client.GetModule("UIAutomationCore.dll") 去解析系统类型库，
             # 这一步恰恰是打包后最容易失效的环节 —— 这里实打实做一次并记入日志。
-            #
-            # ★ 只要拿到根控件就够：原先为了在日志里写"根控件子项 N 个"而调了一次
-            #   `GetChildren()`，实测**每次 0.65 s**（它要把整张桌面元素表重建一遍），
-            #   纯属白花 —— v1.5.0 删掉。
+            # ★ 只要拿到根控件就够，不调 GetChildren()（那要 0.65 s 重建整张桌面
+            #   元素表，纯属白花）。
             try:
                 import uiautomation as _ua
                 _ua.GetRootControl()
@@ -1364,8 +1332,8 @@ def main() -> None:
     if not _claim_single_instance():
         return
     _enable_dpi()
-    # ★ 启动自检（UIA）不在这里做 —— 它要 1 s 左右，会让窗口迟迟不出现。
-    #   改为窗口显示之后由 `App._boot()` 在后台线程里完成，见该方法的说明。
+    # ★ 启动自检（UIA）不在这里做 —— 它要 1 s 左右，会让窗口迟迟不出现；改由窗口
+    #   显示之后 `App._boot()` 在后台线程里完成。
     App().mainloop()
 
 

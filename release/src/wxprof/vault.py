@@ -7,19 +7,17 @@
         avatar.png             头像（tkinter 可直接显示）
         cfg/global_config      登录态：全局配置对（免扫码票据所在）
         cfg/global_config.crc
-        host/...               登录态：该账号的 host 目录（账号级网络路由，
-                               13 个文件直接摊在下面，与槽位<槽位>\host\同构）
+        host/...               登录态：该账号的 host 目录（账号级网络路由）
 
-三件套的来由（本机实测）：
-    · `cfg` 一对必须**成对**保存与还原（.crc 里存着解密用的 IV 与校验），
-      缺一个或配错对，微信就读不出登录态，表现为"有档案却每次都要扫码"。
-    · `host` 是**账号级**的（六阶段实测 12/12），且要放进**实例实际使用的那个
-      槽位**才生效 —— 槽位由 `slot.free_slot()` 在启动前算出。
+两件必须做的事：
+    · `cfg` 一对必须**成对**保存与还原（.crc 里存着解密用的 IV 与校验），缺一个或
+      配错对，微信就读不出登录态，表现为"有档案却每次都要扫码"。
+    · `host` 是**账号级**的，且要放进**实例实际使用的那个槽位**才生效 —— 槽位由
+      `slot.free_slot()` 在启动前算出。
 
-刻意**不采**的东西：
-    · `<wxid>_<hash>\\config` 等账号数据目录：实测与登录态无关（整目录删掉仍免
-      扫码登录），采进来只会误导。
-    · `<槽位>\\kvcomm\\*`、`psk.key`、`tlsregion.ini`、`cdncomm\\*`：与账号无关。
+刻意**不采**：`<wxid>_<hash>\\config` 等账号数据目录（实测与登录态无关，整目录删掉
+仍免扫码登录）、`<槽位>\\kvcomm\\*`、`psk.key`、`tlsregion.ini`、`cdncomm\\*`
+（与账号无关）。
 """
 from __future__ import annotations
 
@@ -29,7 +27,7 @@ import os
 import shutil
 import time
 
-from . import mmkv
+from . import file_md5, mmkv
 
 CONFIG_FILES = ("global_config", "global_config.crc")
 
@@ -64,14 +62,6 @@ def _write_bytes(dst: str, data: bytes) -> bool:
         return True
     except OSError:
         return False
-
-
-def _md5(path: str) -> str:
-    try:
-        with open(path, "rb") as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except OSError:
-        return ""
 
 
 class Account:
@@ -161,9 +151,6 @@ class Vault:
             if a.wxid == wxid:
                 return a
         return None
-
-    def find(self, wxid: str):
-        return self.reload(wxid)
 
     def by_uin(self, uin: int):
         if not uin:
@@ -269,14 +256,15 @@ class Vault:
     # ------------------------------------------------------------- 指纹
     def cfg_fingerprint(self, wxid: str) -> str:
         """档案里 config 对的内容指纹（两文件 md5 拼接后取 md5）。"""
-        vals = [_md5(os.path.join(self.cfg_dir(wxid), fn)) for fn in CONFIG_FILES]
+        vals = [file_md5(os.path.join(self.cfg_dir(wxid), fn))
+                for fn in CONFIG_FILES]
         if not all(vals):
             return ""
         return hashlib.md5(("|".join(vals)).encode()).hexdigest()
 
     @staticmethod
     def live_cfg_fingerprint(cfg_dir: str) -> str:
-        vals = [_md5(os.path.join(cfg_dir, fn)) for fn in CONFIG_FILES]
+        vals = [file_md5(os.path.join(cfg_dir, fn)) for fn in CONFIG_FILES]
         if not all(vals):
             return ""
         return hashlib.md5(("|".join(vals)).encode()).hexdigest()

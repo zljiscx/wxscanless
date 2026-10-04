@@ -5,15 +5,13 @@
 形如 `http://wx.qlogo.cn/mmhead/ver_1/<hash>/132`（实测 HTTP 200、JPEG、132×132；
 `/0` 是原图，`/640` 返回 400）。
 
-为什么不用 `all_users\\head_imgs\\<数字>\\<数字>`：那两个数字与账号按时间戳一一
-对应，但**无法由 wxid / uin / 头像URL 经 md5/sha1/sha256/crc32/Java-hash/FNV 推出**，
-全盘也无明文引用 ⇒ 无法建立"账号 → 目录"的映射，弃用（详见
-_docs/项目实现与实测结论.md §3.5）。
+为什么不用 `all_users\\head_imgs\\<数字>\\<数字>`：那两个数字与账号按时间戳一一对应，
+但无法由 wxid / uin / 头像URL 经 md5/sha1/sha256/crc32/Java-hash/FNV 推出，全盘也
+无明文引用 ⇒ 无法建立"账号 → 目录"的映射。
 
-为什么要自己转 PNG：tkinter（Tk 8.6）原生只认 PNG/GIF/PPM，**不认 JPEG**；
-而本机 Python 3.11 没有 Pillow（且 uiautomation 只装在 3.11）。所以用
-**GDI+**（Windows 自带 gdiplus.dll，Win7 起就有）通过 ctypes 转码，
-**零第三方依赖**。
+为什么要自己转 PNG：tkinter（Tk 8.6）原生只认 PNG/GIF/PPM，**不认 JPEG**，而运行环境
+没有 Pillow。所以用 **GDI+**（Windows 自带 gdiplus.dll，Win7 起就有）通过 ctypes
+转码：零第三方依赖。
 """
 from __future__ import annotations
 

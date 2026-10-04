@@ -1,27 +1,25 @@
 # -*- coding: utf-8 -*-
 """微信登录窗口的 UI 自动化（**全程后台**，不碰真实鼠标键盘）。
 
-微信 4.x 启动后停在登录窗口（类名 `mmui::LoginWindow`），上面显示
-"当前登录用户 XXX" 和一个「进入微信」按钮 —— 必须点一下才真正登录。
+微信 4.x 启动后停在登录窗口（UIA 类名 `mmui::LoginWindow`），上面显示"当前登录
+用户 XXX" 和一个「进入微信」按钮 —— 必须点一下才真正登录。
 
 本模块只做三件事，且都要求**后台无感**：
 
     1. 等到登录窗口出现，并读出登录页状态（一键登录 / 二维码页 / 加载中）
     2. **向按钮自己的窗口句柄投递鼠标消息**点击「进入微信」
        —— 不用屏幕坐标、不移动光标，所以窗口被别的程序挡住也点得中，
-          用户的鼠标键盘操作完全不干扰（早期用真实点击会把用户的鼠标抢走，
-          窗口被遮时还会点到别的窗口上）
+          用户的鼠标键盘操作完全不干扰
     3. 判定是否真的进了主界面（`mmui::MainWindow` 出现）
 
-线程注意（重要）：
-    uiautomation 在**非主线程**里使用前必须先 CoInitialize，否则所有 UI 操作会
-    **静默失败**（错误只写进 @AutomationLog.txt）。工作线程里请用：
+线程注意（重要）：uiautomation 在**非主线程**里使用前必须先 CoInitialize，否则所有
+UI 操作会**静默失败**（错误只写进 @AutomationLog.txt）。工作线程里请用：
 
         with ui.ui_scope():
-            win = ui.find_login_window()
+            win = ui.login_window_of(pid)
 
-依赖 `uiautomation`（pip install uiautomation），且**只装在 Python 3.11**；
-导入失败时 `available()` 返回 False，调用方应显式报错而不是静默降级。
+依赖 `uiautomation`（已随 `release\\ext\\` 一并分发）；导入失败时 `available()` 返回
+False，调用方应显式报错而不是静默降级。
 """
 from __future__ import annotations
 
@@ -31,15 +29,11 @@ import os
 import time
 from ctypes import wintypes
 
-# ★ 延迟导入（`_ensure()`），不在模块导入期做。
-#   实测 `import uiautomation` 要 **0.56 s**（comtypes 首次解析系统类型库），
-#   而本模块是在界面代码之前被导入的 ⇒ 这段耗时会让"双击到窗口出现"平白多等
-#   半秒多。改成首次真正用到 UI 自动化时才导入：界面可以先出来（显示"正在加载
-#   运行环境"），这半秒被藏进用户已经在看界面的时间里。
-#
-#   语义变化：`_OK` 的初值由 True/False 变为 **None（还没试过）**，因此所有
-#   判据必须走 `_ensure()`，不能直接读 `_OK` —— 读 None 只会得到"不可用"，
-#   永远不会触发导入。外部（app.py）请用 `available()`。
+# ★ 延迟导入（`_ensure()`），不在模块导入期做：`import uiautomation` 要 0.56 s
+#   （comtypes 首次解析系统类型库），放在导入期会让"双击到窗口出现"平白多等半秒。
+#   改成首次真正用到 UI 自动化时才导入 —— 这半秒被藏进用户已经在看界面的时间里。
+#   `_OK` 的初值为 None（还没试过），因此所有判据必须走 `_ensure()`，不能直接读
+#   `_OK`。外部（app.py）请用 `available()`。
 auto = None
 _OK = None                      # None=尚未尝试 / True=可用 / False=不可用
 _IMPORT_ERR = ""
@@ -100,25 +94,20 @@ SW_RESTORE = 9                   # 从最小化/隐藏状态恢复并激活
 
 # 点「进入微信」的尝试顺序 = **级联**：一招没反应就换下一招（不是同招反复发）。
 #
-# 依据：`_probe/verify_clicks.py` 两轮实测（12 种方法逐个验 + 8 种在"有人正在用电脑"
-# 下复验 2 遍，共 3 次样本/招，**全部 100% 有效**）。既然有效性分不出高下，级联顺序就按
-# ①零副作用优先 ②通路不重复优先 ③快者在前 来排（耗时为该 3 次样本的平均值）：
+# 依据：12 种方法逐个实测（每招 3 次样本，全部 100% 有效）。既然有效性分不出高下，
+# 级联顺序就按 ①零副作用优先 ②通路不重复优先 ③快者在前 来排（括号内为实测均值）：
 #
 #   key-win    键盘 VK_RETURN → **窗口**句柄     77 ms  ← 最快，且**不依赖按钮坐标**
-#   mouse-btn  鼠标三连      → **按钮**句柄    125 ms  ← 生产沿用已久的招，零副作用
+#   mouse-btn  鼠标三连      → **按钮**句柄    125 ms  ← 零副作用
 #   key-btn    键盘 VK_SPACE  → **按钮**句柄    113 ms
 #   mouse-win  鼠标三连      → **窗口**句柄    160 ms
 #
 # 这 4 招正好铺满「{键盘, 鼠标} × {窗口句柄, 按钮句柄}」的 2×2 —— 要覆盖的是**通路**，
 # 不是方法个数（同类方法一个失效、其余的通常一起失效，再加只是重复押注）。
 #
-# **落选**（实测同样有效，但重复或有副作用，留作备用知识）：
-#   M8 AttachThreadInput+回车 —— 唯一有副作用（连接两线程输入队列），且无实测收益；
-#   M5 WM_MOUSEACTIVATE+鼠标 —— 会改窗口激活状态；
-#   M2 SendMessageTimeout    —— 同步等待，有阻塞风险；M12 双击 —— 与 mouse-btn 同路。
-#
-# 实测**无效**（不进级联）：UIA `InvokePattern.Invoke()` / `LegacyIAccessible.DoDefaultAction()`
-# （本版微信按钮无这些实现）、`BM_CLICK`、鼠标三连用**屏幕坐标**（Qt 只认客户区坐标）。
+# 实测**无效**（不进级联）：UIA `InvokePattern.Invoke()` /
+# `LegacyIAccessible.DoDefaultAction()`（本版微信按钮无这些实现）、`BM_CLICK`、
+# 鼠标三连用**屏幕坐标**（Qt 只认客户区坐标）。
 CLICK_METHODS = ("key-win", "mouse-btn", "key-btn", "mouse-win")
 
 # 旧名兼容（"mouse"=现 mouse-btn，"key"=现 key-btn）
@@ -127,8 +116,6 @@ CLICK_ALIAS = {"mouse": "mouse-btn", "key": "key-btn"}
 # 日志里显示的中文名
 CLICK_CN = {"key-win": "键盘回车→窗口", "mouse-btn": "鼠标三连→按钮",
             "key-btn": "键盘空格→按钮", "mouse-win": "鼠标三连→窗口"}
-
-ALLOW_REAL_MOUSE = False        # 保留开关；本工具永不使用真实鼠标
 
 
 # ----------------------------------------------------------- 线程初始化
@@ -198,14 +185,10 @@ def grab(path: str, ctrl=None) -> str:
 
 
 # --------------------------------------- 顶层窗口快路径（Win32 枚举 + 句柄缓存）
-# ★★ 为什么必须有这条快路径（2026-10-04 实测，详见 _docs §7.14）：
-#   老做法 `auto.GetRootControl().GetChildren()` 在 246~260 个顶层窗口的桌面上要
-#   **456~547 ms/次**（它每次都在重建整张桌面元素表），而 `login_windows()` /
-#   `main_windows()` 每次调用都在做这件事：
-#     · `_launch_and_wait` 一轮 ≈ 0.545（登录窗口）+ 0.545（主窗口）+ 0.15 ≈ 1.24 s
-#     · `click_enter` 每轮在"看按钮在不在"之前，也先白付 0.545 s
-#     · `wait_entered` 认主界面同理
-#   ⇒ 用户实测"肉眼看到「进入微信」后还要等好几秒才点"，**慢的不是点击，是"看"**。
+# ★★ 为什么必须有这条快路径：
+#   老做法 `auto.GetRootControl().GetChildren()` 在 250 个上下顶层窗口的桌面上要
+#   **456~547 ms/次**（每次都在重建整张桌面元素表），而登录/主界面的每次查找都在做
+#   这件事 ⇒ 用户看到的"看到「进入微信」后还要等好几秒才点"，**慢的不是点击，是"看"**。
 #
 #   快路径 = `EnumWindows`（~3~8 ms / 260 窗口）取句柄 → 按 pid 过滤（只剩几个）
 #   → **只对"可见"的那些**做 UIA（实测 4 ms/次读 ClassName，且**按句柄缓存**）。
@@ -215,17 +198,16 @@ def grab(path: str, ctrl=None) -> str:
 #     ① **UIA 的 ClassName ≠ Win32 类名**。微信两类窗口的 Win32 类名**都是**
 #        `Qt51514QWindowIcon`，只有 UIA 才报 `mmui::LoginWindow` / `mmui::MainWindow`
 #        —— 所以过滤只能按 pid 做，判类型仍必须靠 `ControlFromHandle` 读 ClassName。
-#     ② `ControlFromHandle(hwnd)` 读到的就是 UIA 树里那个 `mmui::MainWindow`
-#        （2026-10-04 实测确认，见 `_probe/login_timeline.py --fpcheck`）。
+#     ② `ControlFromHandle(hwnd)` 读到的就是 UIA 树里那个 `mmui::MainWindow`。
 #     ③ **只缓存 `mmui::*` 的结论**。窗口刚建出来时微信的 UIA provider 还没注册，
-#        读到的会先是 **Win32 类名**（`Qt51514QWindowIcon`）；把那个名字缓存下来，
-#        等它变成 `mmui::LoginWindow` 时就**永远看不到登录窗口**了。
+#        读到的会先是 **Win32 类名**；把那个名字缓存下来，等它变成 `mmui::LoginWindow`
+#        时就**永远看不到登录窗口**了。
 #
 #   为什么加"可见"这一层过滤：一个微信进程有 **14 个**顶层窗口（IME / tooltips /
-#   Chrome_SystemMessageWindow / Base_PowerMessageWindow / 托盘消息窗口 …），逐个读
-#   ClassName 要 4 ms/个 = 54 ms/轮；而真正有用的（登录窗口 296x388、主界面 896x648）
-#   一定是**可见**的，其余全是隐藏的消息窗口。实测候选从 14 降到 ~2。
-#   被排除的只有"当前不可见"的窗口 —— 轮询粒度 0.15 s，它一旦显示出来就会被看到。
+#   Chrome_SystemMessageWindow / 托盘消息窗口 …），逐个读 ClassName 要 4 ms/个 =
+#   54 ms/轮；而真正有用的（登录窗口、主界面）一定是**可见**的，其余全是隐藏的
+#   消息窗口。被排除的只有"当前不可见"的窗口 —— 轮询粒度 0.15 s，它一旦显示出来
+#   就会被看到。
 _FAST_WND = True                # 出问题时置 False 即回到老的整树枚举
 WND_VISIBLE_ONLY = True         # 只认可见窗口（登录/主界面需要它都是可见的）
 
@@ -289,11 +271,10 @@ def _wx_pids():
 def _control_of(hwnd: int):
     """hwnd → (UIA 控件, UIA 类名)。读不出来返回 (None, "")。
 
-    ★ 缓存规则（关键）：**只有读到 `mmui::*` 才认为结论稳定、长期复用**；
-    读到别的（Win32 类名等）时**每次重读** —— 因为微信的 UIA provider 是
-    "窗口先建出来、provider 稍后才注册"，先读到的 `Qt51514QWindowIcon`
-    过一会儿就会变成 `mmui::LoginWindow`。把前者缓存住 = 登录窗口永远找不到。
-    重读只花 ~4 ms（控件对象本身复用，不必再做 `ElementFromHandle`）。
+    ★ 缓存规则（关键）：**只有读到 `mmui::*` 才认为结论稳定、长期复用**；读到别的
+    （Win32 类名等）时**每次重读** —— 微信的 UIA provider 是"窗口先建出来、provider
+    稍后才注册"，先读到的 `Qt51514QWindowIcon` 过一会儿就会变成 `mmui::LoginWindow`。
+    把前者缓存住 = 登录窗口永远找不到。重读只花 ~4 ms（控件对象本身复用）。
     """
     ent = _WND_CACHE.get(hwnd)
     if ent is not None and ent[1] in _MMUI_CLS:
@@ -487,10 +468,9 @@ def _iter_controls(root, max_depth: int = 14, max_nodes: int = 0):
 def qr_evidence(win) -> str:
     """二维码页的**正向证据**（空串 = 没有证据）。
 
-    为什么不能用"「进入微信」按钮没了"当判据：实测（10-02 14:08）点击成功后
-    按钮也会先消失，而登录窗口要再过一会儿才销毁 —— 用"按钮没了"判断会把
-    **正在进主界面**误判成**被拒**，然后程序自己打断一次成功的登录。
-    所以这里只认正向证据：
+    为什么不能用"「进入微信」按钮没了"当判据：实测点击成功后按钮也会先消失，
+    而登录窗口要再过一会儿才销毁 —— 用"按钮没了"判断会把**正在进主界面**误判成
+    **被拒**，然后程序自己打断一次成功的登录。所以这里只认正向证据：
         a) 控件名里出现"二维码/扫码登录"等字样
         b) 有「切换账号」但没有「进入微信」（二维码页的固定布局）
     """
@@ -676,17 +656,13 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
                 pid: int = 0, ready: float = 0.0) -> tuple:
     """点「进入微信」并判定结果。返回 (是否进入主界面, 方式)。
 
-    ★ 设计目标（用户要求）：**「进入微信」一出现就点**，不额外等"稳定"。
-    两个阶段：
+    设计目标：**「进入微信」一出现就点**，不额外等"稳定"。两个阶段：
 
       `ready > 0`  阶段一：按 `poll` 粒度轮询「进入微信」按钮，**出现即进入阶段二**
                    （最多等 ready 秒；期间若先出现二维码正向证据 ⇒ 判被拒）。
       `wait`       阶段二：**级联点击** + 确认的总时长。按 `CLICK_METHODS` 一招一招
-                   来（键盘/鼠标 × 窗口/按钮 四种组合）；某一招发出去后
-                   `CLICK_RETRY` 秒内没动静 ⇒ **换下一招**（不同通路，比同招重发有
-                   信息量）；走满一遍仍无反应 ⇒ 只等不点。
-                   早先的做法是"点一次 → 等满 7 秒没确认 → 才换下一招"，用户实测到的
-                   "不是立即点"正是这个白等。
+                   来；某一招发出去后 `CLICK_RETRY` 秒内没动静 ⇒ **换下一招**（不同
+                   通路，比同招重发有信息量）；走满一遍仍无反应 ⇒ 只等不点。
 
     判据只有两条，且都必须有**正向证据**：
 
@@ -694,7 +670,6 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         被拒：登录窗口出现二维码页的正向证据（qr_evidence），且稳定 QR_STABLE 秒
 
     `pid` 是本次新启动实例的进程号。**传了它就必须按它判**（见 appeared()）。
-
     **绝不能**用"「进入微信」按钮消失了"当失败判据（见 qr_evidence 说明）。
 
     第二个返回值的含义：
@@ -705,13 +680,10 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
     def appeared() -> bool:
         """本次实例的主界面是否已出现。
 
-        ★ **必须按 `pid` 判，不能再用「主窗口总数 > base_main」**：
-        登录过程中会把旧实例的窗口显示回来（`login.restore_windows` 提前恢复），
-        那些"复活"的窗口会让总数凭空虚高、把**别人的窗口**算成本次登录的成果。
-
-        2026-10-04 实测到的假成功：第二个账号停在登录页、「进入微信」一次都没点，
-        却因为旧窗口先被恢复（总数 0→1 > base_main=0）被判成"主界面已出现"，
-        于是 `for` 循环第一轮就 `return True`，账号根本没登进去，界面却报成功。
+        ★ **必须按 `pid` 判，不能用「主窗口总数 > base_main」**：登录过程中会把旧
+        实例的窗口显示回来（`login.restore_windows` 提前恢复），那些"复活"的窗口
+        会让总数凭空虚高、把**别人的窗口**算成本次登录的成果（实测过一次假成功：
+        账号停在登录页、「进入微信」一次都没点，却被判成功）。
         """
         if pid:
             return main_window_of(pid) is not None
@@ -886,23 +858,16 @@ def main_window_of(pid: int):
 def hide_main_window(win, log=print) -> int:
     """把主界面窗口**隐藏**起来（进程、登录态、窗口内容全部保留）。
 
-    这是多开的必要前置动作：实测已有实例的主窗口**可见**时，再启动微信会被
-    "转交"给那个实例（不产生独立进程）；主窗口**不可见**时才会真正新建实例。
+    这是多开的必要前置动作：已有实例的主窗口**可见**时，再启动微信会被"转交"给
+    那个实例（不产生独立进程）；主窗口**不可见**时才会真正新建实例。
 
-    ★★ v1.4.3 关键改变 —— **从 `WM_CLOSE` 改成 `ShowWindow(SW_HIDE)`**。
-
-    为什么必须换（2026-10-04 用户实测 + 6 种做法逐个验证）：
-
-    `WM_CLOSE` 会被微信当作"关闭主窗口 → 隐藏到托盘"，**微信内部（Qt 层）会置一个
-    隐藏标记**。这个标记只有 Qt 自己的 `show()` 能清，而它只在用户点标题栏按钮时
-    发生。从外部用 `ShowWindow` 怎么组合都清不掉 —— 实测**全部无效**的做法：
-    `SW_RESTORE`、`SW_SHOW`、`SW_MINIMIZE`+`SW_RESTORE`、`AttachThreadInput` 强制激活、
-    `WM_SYSCOMMAND` 的 `SC_MINIMIZE`/`SC_MAXIMIZE`。结果都一样：窗口看得见、画得动
-    （聊天列表照常刷新），但**鼠标键盘全被丢弃**，只有 Qt 自绘的标题栏按钮还有反应。
-
-    `SW_HIDE` 只是 Win32 层的可见性变化，**不经过微信的关闭逻辑**，因此不会置那个
-    标记；恢复时 `SW_SHOW` 即可，Qt 内部状态与 HWND 一致，窗口功能完好
-    （用户实测确认：直接隐藏→显示，窗口一直正常）。
+    ★★ 必须用 `ShowWindow(SW_HIDE)`，不能用 `WM_CLOSE`：`WM_CLOSE` 会被微信当作
+    "关闭主窗口 → 隐藏到托盘"，**微信内部（Qt 层）会置一个隐藏标记**，而这个标记只有
+    Qt 自己的 `show()`（即用户点标题栏按钮）能清。从外部用 `ShowWindow` 怎么组合都
+    清不掉（`SW_RESTORE`、`SW_SHOW`、`SW_MINIMIZE`+`SW_RESTORE`、
+    `AttachThreadInput` 强制激活、`WM_SYSCOMMAND` 的 `SC_MINIMIZE`/`SC_MAXIMIZE`
+    实测全部无效）：窗口看得见、画得动，但**鼠标键盘全被丢弃**。
+    `SW_HIDE` 只是 Win32 层的可见性变化，不经过微信的关闭逻辑，恢复后功能完好。
 
     **返回被隐藏的窗口句柄**（0 表示没成功），调用方拿到它就能用 `show_window`
     原样显示回来 —— 隐藏只是"让它暂时不可见"，不是让用户丢掉窗口。
@@ -951,16 +916,7 @@ def show_window(hwnd: int, log=print) -> bool:
 
     窗口只是被隐藏，**句柄依然有效**，位置/大小/内容全部保留，显示回来即可，
     **不影响账号在线状态**。若用户自己已从托盘点开了窗口、或已退出该账号，
-    这里会安全地什么都不做。
-
-    ★ v1.4.3：收起方式改成 `SW_HIDE` 之后，这里**只需 `SW_SHOW`** ——
-    Qt 内部状态与 HWND 一致，窗口功能完好（用户实测：直接隐藏→显示，一直正常）。
-
-    历史（教训，勿重蹈）：v1.4.2 曾用"最小化 → 恢复"去补救 `WM_CLOSE` 造成的
-    "窗口点不动"，**实测无效**（用户复测两次均失败）。根因是 `WM_CLOSE` 让微信
-    置上了内部隐藏标记，而 `ShowWindow` 系列**根本进不到 Qt 里去** ——
-    连 `WM_SYSCOMMAND` 的 `SC_MINIMIZE`/`SC_MAXIMIZE` 也一样无效。
-    唯一有效的是用户手点 Qt 自绘的标题栏按钮。
+    这里会安全地什么都不做。收起方式既然是 `SW_HIDE`，恢复就只需 `SW_SHOW`。
     """
     if not hwnd:
         return False
