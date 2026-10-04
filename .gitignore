@@ -1,7 +1,7 @@
 # ==============================================================================
 #  wxscanless —— 微信多账号免扫码登录器
 #  （项目/仓库代号 wxscanless；业务代码包名仍为 release\src\wxprof\）
-#  版本库只跟踪：release\ + launcher.py + requirements.txt（+ 本文件）
+#  版本库只跟踪：release\ + launcher.py + 文档文件（+ 本文件）
 #  其余一律不入库，尤其是 data\（账号档案，含登录票据）
 # ==============================================================================
 
@@ -10,7 +10,6 @@
 !/release/
 !/release/**
 !/launcher.py
-!/requirements.txt
 !/README.md
 !/LICENSE
 !/THIRD_PARTY_NOTICES.md
