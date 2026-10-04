@@ -24,11 +24,10 @@ import os
 import time
 from ctypes import wintypes
 
-# ★ 延迟导入（`_ensure()`），不在模块导入期做：`import uiautomation` 要 0.56 s
-#   （comtypes 首次解析系统类型库），放在导入期会让"双击到窗口出现"平白多等半秒。
-#   改成首次真正用到 UI 自动化时才导入 —— 这半秒被藏进用户已经在看界面的时间里。
-#   `_OK` 的初值为 None（还没试过），因此所有判据必须走 `_ensure()`，不能直接读
-#   `_OK`。外部（app.py）请用 `available()`。
+# ★ 延迟导入（走 _ensure()），不在模块导入期做：import uiautomation 要数百毫秒
+#   （comtypes 首次解析系统类型库），会拖慢"双击到窗口出现"。
+#   `_OK` 初值为 None（还没试过）⇒ 所有判据必须走 _ensure()，不能直接读 _OK。
+#   外部（app.py）请用 available()。
 auto = None
 _OK = None                      # None=尚未尝试 / True=可用 / False=不可用
 _IMPORT_ERR = ""
@@ -87,22 +86,13 @@ SW_HIDE = 0                      # 隐藏窗口（纯 Win32 可见性，不触�
 SW_SHOW = 5                      # 按当前状态显示
 SW_RESTORE = 9                   # 从最小化/隐藏状态恢复并激活
 
-# 点「进入微信」的尝试顺序 = **级联**：一招没反应就换下一招（不是同招反复发）。
-#
-# 依据：12 种方法逐个实测（每招 3 次样本，全部 100% 有效）。既然有效性分不出高下，
-# 级联顺序就按 ①零副作用优先 ②通路不重复优先 ③快者在前 来排（括号内为实测均值）：
-#
-#   key-win    键盘 VK_RETURN → **窗口**句柄     77 ms  ← 最快，且**不依赖按钮坐标**
-#   mouse-btn  鼠标三连      → **按钮**句柄    125 ms  ← 零副作用
-#   key-btn    键盘 VK_SPACE  → **按钮**句柄    113 ms
-#   mouse-win  鼠标三连      → **窗口**句柄    160 ms
-#
-# 这 4 招正好铺满「{键盘, 鼠标} × {窗口句柄, 按钮句柄}」的 2×2 —— 要覆盖的是**通路**，
-# 不是方法个数（同类方法一个失效、其余的通常一起失效，再加只是重复押注）。
-#
-# 实测**无效**（不进级联）：UIA `InvokePattern.Invoke()` /
-# `LegacyIAccessible.DoDefaultAction()`（本版微信按钮无这些实现）、`BM_CLICK`、
-# 鼠标三连用**屏幕坐标**（Qt 只认客户区坐标）。
+# 点「进入微信」的级联顺序（一招没反应就换下一招，不是同招反复发）：
+#   key-win    键盘 VK_RETURN → 窗口句柄
+#   mouse-btn  鼠标三连      → 按钮句柄
+#   key-btn    键盘 VK_SPACE → 按钮句柄
+#   mouse-win  鼠标三连      → 窗口句柄
+# 铺满「{键盘, 鼠标} × {窗口句柄, 按钮句柄}」的 2×2 —— 要覆盖的是**通路**，
+# 不是方法个数（同类方法通常一起失效，再加只是重复押注）。
 CLICK_METHODS = ("key-win", "mouse-btn", "key-btn", "mouse-win")
 
 # 旧名兼容（"mouse"=现 mouse-btn，"key"=现 key-btn）
@@ -180,29 +170,16 @@ def grab(path: str, ctrl=None) -> str:
 
 
 # --------------------------------------- 顶层窗口快路径（Win32 枚举 + 句柄缓存）
-# ★★ 为什么必须有这条快路径：
-#   老做法 `auto.GetRootControl().GetChildren()` 在 250 个上下顶层窗口的桌面上要
-#   **456~547 ms/次**（每次都在重建整张桌面元素表），而登录/主界面的每次查找都在做
-#   这件事 ⇒ 用户看到的"看到「进入微信」后还要等好几秒才点"，**慢的不是点击，是"看"**。
+# 用 EnumWindows 按 pid 过滤 + 句柄缓存，避免 GetRootControl().GetChildren()
+# 每次重建整张桌面元素表（数百毫秒级）。
 #
-#   快路径 = `EnumWindows`（~3~8 ms / 260 窗口）取句柄 → 按 pid 过滤（只剩几个）
-#   → **只对"可见"的那些**做 UIA（实测 4 ms/次读 ClassName，且**按句柄缓存**）。
-#   实测同机同刻：老方法 456/544 ms → 快路径 ~5~15 ms（约 30~100 倍）。
-#
-#   三条必须记住的事实：
-#     ① **UIA 的 ClassName ≠ Win32 类名**。微信两类窗口的 Win32 类名**都是**
-#        `Qt51514QWindowIcon`，只有 UIA 才报 `mmui::LoginWindow` / `mmui::MainWindow`
-#        —— 所以过滤只能按 pid 做，判类型仍必须靠 `ControlFromHandle` 读 ClassName。
-#     ② `ControlFromHandle(hwnd)` 读到的就是 UIA 树里那个 `mmui::MainWindow`。
-#     ③ **只缓存 `mmui::*` 的结论**。窗口刚建出来时微信的 UIA provider 还没注册，
-#        读到的会先是 **Win32 类名**；把那个名字缓存下来，等它变成 `mmui::LoginWindow`
-#        时就**永远看不到登录窗口**了。
-#
-#   为什么加"可见"这一层过滤：一个微信进程有 **14 个**顶层窗口（IME / tooltips /
-#   Chrome_SystemMessageWindow / 托盘消息窗口 …），逐个读 ClassName 要 4 ms/个 =
-#   54 ms/轮；而真正有用的（登录窗口、主界面）一定是**可见**的，其余全是隐藏的
-#   消息窗口。被排除的只有"当前不可见"的窗口 —— 轮询粒度 0.15 s，它一旦显示出来
-#   就会被看到。
+# ★ 三条约束：
+#   ① UIA 的 ClassName ≠ Win32 类名 —— 微信两类窗口的 Win32 类名**都是**
+#      Qt51514QWindowIcon，只有 UIA 报 mmui::LoginWindow / mmui::MainWindow
+#      ⇒ 只能按 pid 过滤，判类型仍靠 ControlFromHandle 读 ClassName。
+#   ② 只对**可见**窗口读 UIA（一个微信进程有十几个隐藏顶层窗口）。
+#   ③ **只缓存 mmui::* 的结论** —— 窗口刚建时 provider 尚未注册，先读到的是
+#      Win32 类名；缓存它会永远看不到登录窗口。
 _FAST_WND = True                # 出问题时置 False 即回到老的整树枚举
 WND_VISIBLE_ONLY = True         # 只认可见窗口（登录/主界面需要它都是可见的）
 
@@ -762,11 +739,9 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
             log("  %.0f 秒内未等到「进入微信」按钮" % ready)
             return False, ""
 
-    # ---- 阶段二：**级联点击** + 细粒度确认。
-    #      按 CLICK_METHODS 顺序一招一招来：某一招发出去后 CLICK_RETRY 秒内
-    #      主界面出现 / 按钮消失 ⇒ 收工；没动静（这一招没落到按钮上）⇒ **换下一招**
+    # ---- 阶段二：级联点击 + 细粒度确认。按 CLICK_METHODS 顺序一招一招来：
+    #      某招发出后主界面出现 / 按钮消失 ⇒ 收工；没动静 ⇒ **换下一招**
     #      （不同通路，比"同招重发"有信息量）。走满一遍仍无反应 ⇒ 只等不点。
-    #      依据：两轮实测 8 招 100% 有效、最慢 173 ms ⇒ 0.4 s 的判定窗足够。
     sent_any = False
     attempts = 0
     gone = False

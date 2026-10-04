@@ -178,13 +178,9 @@ def scale_to_png(src: str, dst: str, size: int) -> bool:
 
 
 # --------------------------------------------------------------- 离线灰度
-# 界面里"离线账号头像置灰"需要一张灰度图。tkinter 自己没有灰度能力
-# （`PhotoImage` 只支持整倍缩放），所以还是走 GDI+：新建一张同尺寸的 32bpp
-# 位图把原图画上去，逐像素按亮度重算后存成 PNG。标准库 + 系统 DLL，零依赖。
-#
-# 为什么不用 `GdipSetImageAttributesColorMatrix`：那要构造 5×5 矩阵并改用
-# `GdipDrawImageRectRectI`，参数多、失败只回一个状态码，不好排查；而头像只有
-# 88×88 ≈ 7.7k 像素，逐像素读写几十毫秒，且**生成一次即落盘**长期复用。
+# tkinter 无灰度能力（PhotoImage 只支持整倍缩放），走 GDI+ 新建同尺寸 32bpp
+# 位图，逐像素按亮度重算后存成 PNG。头像仅 88×88 ≈ 7.7k 像素，几十毫秒，
+# 且**生成一次即落盘**长期复用。
 GRAY_SUFFIX = "_gray"
 _LUMA_R, _LUMA_G, _LUMA_B = 299, 587, 114      # ITU-R BT.601 亮度权重（千分比）
 

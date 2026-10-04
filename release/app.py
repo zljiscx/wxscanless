@@ -36,21 +36,12 @@ DATA_DIR = os.path.join(ROOT, "data")
 LOG_PATH = os.path.join(ROOT, "logs", "wechat_launcher.log")
 
 
-# --- 启动阶段彻底消除"闪黑窗" -----------------------------------------
-# 本程序是 GUI（打包为 --noconsole，自身没有控制台）。只要有任何一处通过
-# subprocess 执行**控制台程序**，Windows 就会给它新建一个控制台窗口
-# —— 屏幕上一闪而过的"CMD 黑窗"就是这么来的。
-#
-# 实测定位到的触发点：打包（frozen）环境下标准库 `platform` 会走到 `_syscmd_ver()`，
-# 其实现是 `subprocess.check_output('ver', shell=True)`，也就是执行 `cmd.exe /c ver`
-# —— 只为取一个系统版本号，却弹出一个控制台窗口。
-#
-# 两层处理（都必须在本模块其它 import/逻辑之前完成，否则同一条导入链上已经
-# 发生的调用就漏掉了）：
-#   ① 精准：把 `platform._syscmd_ver` 换成不执行外部命令的实现，版本号改从
-#      `sys.getwindowsversion()` 取（同一信息源，格式与 `ver` 输出一致）；
-#   ② 兜底：包装 `subprocess.Popen`，凡子进程一律附加 CREATE_NO_WINDOW，
-#      今后无论哪个依赖再调外部命令，都不会再闪窗。
+# --- 消除"闪黑窗"：GUI 进程内不得执行控制台程序 -------------------------
+# ★ 以下两层处理**都必须在本模块其它 import 之前完成**，否则同一条导入链上
+#   已经发生的调用就漏掉了。
+#   ① 替换 platform._syscmd_ver（它内部会启动控制台程序取版本号），
+#      版本号改从 sys.getwindowsversion() 取；
+#   ② 包装 subprocess.Popen，凡子进程一律附加 CREATE_NO_WINDOW 兜底。
 CREATE_NO_WINDOW = 0x08000000
 
 
@@ -218,14 +209,10 @@ PALETTE = ("#5b8ff9", "#5ad8a6", "#f6bd16", "#e8684a", "#6dc8ec",
            "#9270ca", "#ff9d4d", "#269a99", "#ff99c3", "#7f8fa6")
 
 # --- 单实例控制 ---------------------------------------------------------
-# 登录器**只允许运行一个**（用户要求）。用 Windows 命名互斥体做进程级互斥：
-# 第二个实例**不会开窗**，而是通过命名事件通知已有实例"把窗口显示到前台"
-# （即使它正贴边收在屏幕边缘），随后自己安静退出。
-# 这样用户双击时一定能看到反馈，而不是"双击了却像没反应"。
-#
-# 用 `Local\` 前缀而非 `Global\`：创建 Global 命名对象需要
-# SeCreateGlobalPrivilege（普通进程默认没有），会直接失败；而同一用户会话内
-# 互斥用 Local 已经足够。
+# 登录器只允许运行一个。用命名互斥体做进程级互斥：第二个实例**不开窗**，
+# 通过命名事件通知已有实例把窗口显示到前台（即使它正贴边收着），随后安静退出。
+# ★ 必须用 `Local\` 前缀而非 `Global\`：创建 Global 命名对象需要
+#   SeCreateGlobalPrivilege（普通进程默认没有），会直接失败。
 MUTEX_NAME = "Local\\wxprof_wechat_launcher_mutex"
 SHOW_EVENT = "Local\\wxprof_wechat_launcher_show"
 
@@ -1293,11 +1280,8 @@ def _preflight() -> bool:
                  % (bool(getattr(sys, "frozen", False)),
                     sys.version.split()[0], ok))
         if ok:
-            # 导入成功 ≠ 真的能用：uiautomation 在**首次调用**时才执行
-            # comtypes.client.GetModule("UIAutomationCore.dll") 去解析系统类型库，
-            # 这一步恰恰是打包后最容易失效的环节 —— 这里实打实做一次并记入日志。
-            # ★ 只要拿到根控件就够，不调 GetChildren()（那要 0.65 s 重建整张桌面
-            #   元素表，纯属白花）。
+            # 导入成功 ≠ 真的能用：首次调用才解析系统类型库，这里实打实做一次。
+            # ★ 只取根控件，不调 GetChildren()（会重建整张桌面元素表，很慢）。
             try:
                 import uiautomation as _ua
                 _ua.GetRootControl()

@@ -247,28 +247,10 @@ def detect() -> WeChatEnv:
 
 
 # --------------------------------------------------------------- XWeb 运行时
-# 微信 4.x 的小程序 / 内置浏览器宿主 WeChatAppEx.exe 采用「存根 + 版本化负载」部署：
-#
-#     ...\xplugin\plugins\RadiumWMPF\
-#     ├─ WeChatAppEx.exe                 存根（入口）
-#     └─ <版本号>\extracted\runtime\
-#         ├─ xweb_elf.dll                ← 只存在于这里
-#         ├─ WeChatAppEx.exe             与存根同内容（真正的宿主）
-#         └─ flue.dll / XNet.dll / ...
-#
-# ★ 关键事实（2026-10-03 实测确立）：xweb_elf.dll 是存根的**第一个静态导入**，
-#   加载器必须在进程执行任何一行代码之前解析它。而该 DLL **只存在于 runtime\
-#   里**，存根自己所在的目录没有。Windows 的 DLL 搜索顺序中能命中 runtime\ 的
-#   只有两条：
-#
-#     1) 当前工作目录恰好是 runtime\  —— 微信自己会这么设，但并不总是可靠。
-#        一旦不是，进程直接以 0xC0000135(STATUS_DLL_NOT_FOUND) 死掉，由 csrss
-#        弹出「系统错误：由于找不到 xweb_elf.dll」。一个实例会连带拉起 11 个
-#        该进程，于是表现为"要点 11 下确定"。
-#     2) runtime\ 出现在 PATH 里       —— 这一条可以从外部兜住，不必改动微信。
-#
-# 修复就落在第 2 条：启动微信前把 runtime\ 补进本进程的 PATH。实测：错误工作
-# 目录 + PATH 前置 runtime 的启动结果，与工作目录正确时**完全一致**。
+# WeChatAppEx.exe 采用「存根 + 版本化负载」部署：xweb_elf.dll 是存根的静态导入，
+# 但**只存在于** <版本号>\extracted\runtime\ —— 工作目录不是它时，进程会以
+# 0xC0000135 直接死掉。故启动微信前把该目录**追加**到 PATH 末尾。
+# ★ 必须**追加末尾而非前置**：runtime\ 下有 ffmpeg.dll 等同名常见库，前置会顶掉别处版本。
 _XWEB_PLUGIN_ROOT = ("xplugin", "plugins", "RadiumWMPF")
 _XWEB_DLL = "xweb_elf.dll"
 
