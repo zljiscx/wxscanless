@@ -1,25 +1,20 @@
 # -*- coding: utf-8 -*-
-"""微信登录窗口的 UI 自动化（**全程后台**，不碰真实鼠标键盘）。
+"""微信登录窗口的 UI 自动化（全程后台，不碰真实鼠标键盘）。
 
-微信 4.x 启动后停在登录窗口（UIA 类名 `mmui::LoginWindow`），上面显示"当前登录
-用户 XXX" 和一个「进入微信」按钮 —— 必须点一下才真正登录。
+微信 4.x 启动后停在登录窗口（UIA 类名 mmui::LoginWindow），点「进入微信」才真正登录。
+本模块三件事：
 
-本模块只做三件事，且都要求**后台无感**：
+    1. 等登录窗口出现，读出登录页状态（一键登录 / 二维码页 / 加载中）
+    2. 向按钮自身的窗口句柄投递鼠标消息点击（不用屏幕坐标、不移动光标）
+    3. 判定是否真的进了主界面（mmui::MainWindow 出现）
 
-    1. 等到登录窗口出现，并读出登录页状态（一键登录 / 二维码页 / 加载中）
-    2. **向按钮自己的窗口句柄投递鼠标消息**点击「进入微信」
-       —— 不用屏幕坐标、不移动光标，所以窗口被别的程序挡住也点得中，
-          用户的鼠标键盘操作完全不干扰
-    3. 判定是否真的进了主界面（`mmui::MainWindow` 出现）
+★ 线程：非主线程使用 uiautomation 前必须先 CoInitialize，否则 UI 操作静默失败
+  （错误只写入 @AutomationLog.txt）。工作线程请用：
+      with ui.ui_scope():
+          win = ui.login_window_of(pid)
 
-线程注意（重要）：uiautomation 在**非主线程**里使用前必须先 CoInitialize，否则所有
-UI 操作会**静默失败**（错误只写进 @AutomationLog.txt）。工作线程里请用：
-
-        with ui.ui_scope():
-            win = ui.login_window_of(pid)
-
-依赖 `uiautomation`（已随 `release\\ext\\` 一并分发）；导入失败时 `available()` 返回
-False，调用方应显式报错而不是静默降级。
+依赖 uiautomation（已随 release\\ext\\ 分发）；导入失败时 available() 返回 False，
+调用方应显式报错而不是静默降级。
 """
 from __future__ import annotations
 

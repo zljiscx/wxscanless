@@ -1,22 +1,14 @@
 # -*- coding: utf-8 -*-
-"""MMKV 解密与解析（纯 Python，无第三方依赖）。
+"""MMKV 解密与解析（纯 Python AES-128-CFB，无第三方依赖）。
 
-微信 4.x 把"这次该登录哪个账号"记在
-    <数据根>\\xwechat_files\\all_users\\config\\global_config  (+ .crc)
-这是一个 AES-128-CFB 加密的 MMKV 文件。本模块的要点：
+解密 `<数据根>\\xwechat_files\\all_users\\config\\global_config`（+ .crc），读出它属于
+哪个账号（wxid / 昵称 / uin），用于快照自校验以避免串档。
 
-· 密钥 = Weixin.dll 里的明文常量 "xwechat_crypt_key" 的前 16 字节。
-· 主文件布局：[4 字节头][密文 payload][0x00 填充]
-  .crc 布局：crc32(4) | version(4) | sequence(4) | iv(16) | actualSize(4) | ...
-· payload 是 MMKV 的迷你 protobuf 序列：循环 { keyLen key valueLen value }，
-  字符串型 value 内部再套一层长度前缀。
-· CFB 是链式的，但**只有第一个分组受 IV 影响**，所以对所有候选 IV 只重算第一块。
-
-自带 AES 而不依赖 pycryptodome：运行环境是系统Python 3.11 且要求兼容 Win7，
-第三方依赖越少越好；CFB 解密只用分组密码的加密方向。
-
-用途：读出某个 global_config 属于哪个账号（wxid / 昵称 / uin），用于**快照自校验**
-避免串档，并供 watcher 判断"磁盘上这份配置归谁"。
+格式要点：
+  · 密钥 = Weixin.dll 里的明文常量 "xwechat_crypt_key" 的前 16 字节
+  · 主文件 [4 字节头][密文 payload][0x00 填充]；.crc 给出 version / sequence / IV / actualSize
+  · payload 为 MMKV 迷你 protobuf：循环 { keyLen key valueLen value }
+  · CFB 只有第一分组受 IV 影响，故对所有候选 IV 只重算第一块
 
 用法：python -m wxprof.mmkv [--key] [路径...]
 """
@@ -310,9 +302,8 @@ def as_dict(info: dict) -> dict:
 def summary(info: dict) -> dict:
     """抽出与登录态直接相关的关键字段。"""
     d = as_dict(info)
-    # ★ uin 必须按 **varint** 解码，不能按小端整数读：同一份 5 字节
-    #   `ad ac 88 86 0a` 的 varint 值是 2697074221（=槽位 monitordata 里的数字），
-    #   而小端 u64 读出来是 45206777005 —— 那是同一字段的另一种读法，是错的。
+    # ★ uin 必须按 **varint** 解码，不能按小端整数读：同一份字节序列
+    #   按两种读法会得到完全不同、相差数个数量级的结果（小端 u64 的读法是错的）。
     _raw_uin = val_bytes(d.get("ilink_current_uin", b""))
     _uin_dec, _ = _varint(_raw_uin, 0)
     return {

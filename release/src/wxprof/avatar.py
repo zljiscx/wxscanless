@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
-"""账号头像：从微信 CDN 下载，并转成 tkinter 能显示的 PNG。
+"""账号头像：下载并转成 tkinter 可显示的 PNG。
 
-来源：`global_config` 里的 **`mmkv_key_head_img_url`**（该账号自己的头像 URL），
-形如 `http://wx.qlogo.cn/mmhead/ver_1/<hash>/132`（实测 HTTP 200、JPEG、132×132；
-`/0` 是原图，`/640` 返回 400）。
+头像地址取自 global_config 的 `mmkv_key_head_img_url`
+（形如 http://wx.qlogo.cn/mmhead/ver_1/<hash>/132）。
 
-为什么不用 `all_users\\head_imgs\\<数字>\\<数字>`：那两个数字与账号按时间戳一一对应，
-但无法由 wxid / uin / 头像URL 经 md5/sha1/sha256/crc32/Java-hash/FNV 推出，全盘也
-无明文引用 ⇒ 无法建立"账号 → 目录"的映射。
-
-为什么要自己转 PNG：tkinter（Tk 8.6）原生只认 PNG/GIF/PPM，**不认 JPEG**，而运行环境
-没有 Pillow。所以用 **GDI+**（Windows 自带 gdiplus.dll，Win7 起就有）通过 ctypes
-转码：零第三方依赖。
+★ tkinter（Tk 8.6）只认 PNG / GIF / PPM，不认 JPEG，运行环境也没有 Pillow。
+  故用 Windows 自带的 GDI+（gdiplus.dll，Win7 起支持）经 ctypes 转码，零第三方依赖。
 """
 from __future__ import annotations
 

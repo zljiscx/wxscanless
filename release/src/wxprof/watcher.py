@@ -1,20 +1,14 @@
 # -*- coding: utf-8 -*-
-"""实时监控：发现"微信登录成功"就立刻采集/更新登录态。
+"""实时监控：发现微信登录成功即采集 / 更新登录态。
 
 轮询三路信号（默认 2 秒一轮；纯轮询，不依赖文件系统事件，兼容 Windows 7）：
-    1. 槽位占用        —— `<槽位>\\config.ini` 的独占句柄（只读判据）
-    2. 槽位里的账号     —— `kvcomm\\monitordata_<uin>`（登录成功后才写）
-    3. live `global_config` —— 当前这份配置属于谁、票据还在不在
+    1. 槽位占用 —— <槽位>\\config.ini 的独占句柄（只读判据）
+    2. 槽位账号 —— kvcomm\\monitordata_<uin>（登录成功后才写）
+    3. live global_config —— 当前配置归属谁、票据是否还在
 
-采集规则：
-    · **已收录**：定位到该账号所在槽位，比对 host 指纹 / config 指纹，变了才更新；
-    · **未收录**：立即建档（config 对 + host + 头像 + 元信息）；
-    · 多实例在线时，只有 live config 的归属账号能采 config 与头像，其它在线账号
-      只刷新自己的 host（host 分槽位存放，不会串档）。
-
-为什么"登录页"不算登录成功：实例一启动（停在登录页）微信就会把该槽位的
-`monitordata_<uin>` 清掉，只留 `monitordata_0`。所以只有 `monitordata_<uin>`
-出现才代表真的登录了 —— 这正是采集 host 的正确时机。
+★ 只有 monitordata_<uin> 出现才代表真登录（实例停在登录页时它被清成 monitordata_0），
+  这也是采集 host 的正确时机。
+采集规则：已收录比对指纹、变了才更新；未收录立即建档。
 """
 from __future__ import annotations
 

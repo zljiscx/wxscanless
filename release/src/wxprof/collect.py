@@ -1,27 +1,16 @@
 # -*- coding: utf-8 -*-
-"""采集：把"当前登录的账号"收进档案。
+"""采集：把当前登录的账号收进档案。
 
-链路：
-    ① 读 live `global_config`
-         · `mmkv_key_user_name`      → wxid
-         · **varint**(`ilink_current_uin`) → uin
-         · `mmkv_key_head_img_url`   → 头像 URL
-         · `mmkv_key_nick_name`      → 昵称
-    ② 用 uin 定位槽位（哪个槽位的 `kvcomm\\monitordata_<uin>_<X>` 命中，账号就在
-       哪个槽位；每槽位只有一个非零 uin，故不需要任何先验映射，全新账号同样成立）
-    ③ 采该槽位的 `host\\` 整目录
-    ④ config 一对（`global_config` + `.crc`）从 `all_users\\config` 采
+    ① 读 live global_config → wxid / uin（varint）/ 头像 URL / 昵称
+    ② 用 uin 定位槽位（含 monitordata_<uin>_<X> 的那个）
+    ③ 采该槽位的 host\\ 整目录
+    ④ 采 config 一对（global_config + .crc）
 
-**更新判断**：已收录的账号比指纹 —— config 对内容变了 / host 目录变了才更新，
-没变就忽略（既不重复写盘，也不动档案）。
-
-两条必须遵守的边界：
-    · **只认"登录成功"**：`monitordata_<uin>` 是登录后才写的；槽位刚启动（停在
-      登录页）时它会被微信清掉。所以 uin 定位不到槽位时不采 host，只登记账号。
-    · **config 只在它确实属于该账号时采**：多实例在线时 live config 只反映"最后
-      一个写入者"，拿它去覆盖别的账号的档案就是串档。这里用归属自校验，解出的
-      wxid 与目标不符就拒绝落盘。且**没有票据时不覆盖已有档案**（微信会把票据短
-      暂移出配置，此刻采到的是空配置）。
+★ 边界：
+  · 只认"登录成功"：monitordata_<uin> 是登录后才写的，停在登录页时微信会清掉它。
+  · config 只在归属自校验通过时落盘（解出的 wxid 与目标不符即拒绝），
+    且票据为空时不覆盖已有档案。
+  · 已收录的账号比对 host / config 指纹，变了才更新。
 """
 from __future__ import annotations
 

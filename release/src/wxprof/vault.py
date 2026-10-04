@@ -1,23 +1,19 @@
 # -*- coding: utf-8 -*-
-"""账号档案库：一个账号一份登录态。
+"""账号档案库：一个账号一份登录态（aid = wxid）。
 
-档案布局（aid = wxid）:
     data/<wxid>/
-        meta.json              账号元信息（含 uin / 昵称 / 指纹等）
+        meta.json              账号元信息（uin / 昵称 / 指纹等）
         avatar.png             头像（tkinter 可直接显示）
         cfg/global_config      登录态：全局配置对（免扫码票据所在）
         cfg/global_config.crc
-        host/...               登录态：该账号的 host 目录（账号级网络路由）
+        host/...               登录态：账号级网络路由文件
 
-两件必须做的事：
-    · `cfg` 一对必须**成对**保存与还原（.crc 里存着解密用的 IV 与校验），缺一个或
-      配错对，微信就读不出登录态，表现为"有档案却每次都要扫码"。
-    · `host` 是**账号级**的，且要放进**实例实际使用的那个槽位**才生效 —— 槽位由
-      `slot.free_slot()` 在启动前算出。
+★ cfg 一对必须成对保存与还原（.crc 存着 IV 与校验），缺一或配错对会导致
+  "有档案却每次都要扫码"。
+★ host 是账号级的，须放进实例实际使用的那个槽位（由 slot.free_slot() 启动前算出）才生效。
 
-刻意**不采**：`<wxid>_<hash>\\config` 等账号数据目录（实测与登录态无关，整目录删掉
-仍免扫码登录）、`<槽位>\\kvcomm\\*`、`psk.key`、`tlsregion.ini`、`cdncomm\\*`
-（与账号无关）。
+刻意不采：账号数据目录 <wxid>_<hash>\\config、kvcomm\\*、psk.key、tlsregion.ini、cdncomm\\*
+（均与登录态无关）。
 """
 from __future__ import annotations
 
