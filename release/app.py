@@ -157,14 +157,12 @@ WIN_W = 360                             # 窗口宽（固定，不可调）
 WIN_H = 760                             # 窗口高
 MIN_H = 480                             # 屏幕太矮时的兜底高度
 SCROLLBAR_W = 6                         # 列表滚动条宽度
-POLL_MS = 2000
+POLL_MS = 800
 
 # 贴边隐藏只对屏幕右边缘生效
 DOCK_EDGE = 18          # 窗口距屏幕**右**边缘多少像素内 → 自动贴边
-DOCK_PEEK_SIDE = 5      # 贴边后留在屏内的细缝宽度
-DOCK_HOT = 8            # 细缝向外扩展多少像素算"鼠标靠近"
+DOCK_HOT = 8            # 鼠标离屏幕右边缘多少像素内算"靠近"
 DOCK_POLL = 120         # 鼠标位置轮询间隔（ms）
-DOCK_HIDE_DELAY = 1200  # 鼠标离开窗口后多久收回（ms）
 DOCK_SLIDE_MS = 12      # 滑动动画帧间隔（ms）
 
 PALETTE = ("#5b8ff9", "#5ad8a6", "#f6bd16", "#e8684a", "#6dc8ec",
@@ -196,6 +194,63 @@ def _init_win32():
         k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
         _K32 = k
     return _K32
+
+
+# 扩展窗口样式：切这两个位决定窗口是否出现在任务栏
+GWL_EXSTYLE = -20
+WS_EX_APPWINDOW = 0x00040000        # 出现在任务栏
+WS_EX_TOOLWINDOW = 0x00000080       # 不出现在任务栏
+_SWP_NOACTIVATE = 0x0010
+_SWP_NOMOVE = 0x0002
+_SWP_NOSIZE = 0x0001
+_SWP_NOZORDER = 0x0004
+_SWP_FRAMECHANGED = 0x0020
+
+_U32 = None
+
+
+def _init_user32():
+    """按需加载 user32 并声明窗口样式相关函数签名（这些不在 kernel32 里）。"""
+    global _U32
+    if _U32 is None:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        u.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int,
+                                        ctypes.c_ssize_t]
+        u.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                   wintypes.UINT]
+        u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        u.GetAncestor.restype = wintypes.HWND
+        _U32 = u
+    return _U32
+
+
+def _taskbar_visible(win, show: bool) -> bool:
+    """把窗口在任务栏里的显示开关切换掉（不重建窗口、不影响可见性）。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = _init_user32()
+        root = u.GetAncestor(wintypes.HWND(win.winfo_id()), 2)  # GA_ROOT
+        h = wintypes.HWND(int(root or win.winfo_id()))
+        ex = u.GetWindowLongPtrW(h, GWL_EXSTYLE)
+        if show:
+            ex = (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+        else:
+            ex = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+        u.SetWindowLongPtrW(h, GWL_EXSTYLE, ctypes.c_ssize_t(ex))
+        u.SetWindowPos(h, None, 0, 0, 0, 0,
+                       _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER
+                       | _SWP_FRAMECHANGED | _SWP_NOACTIVATE)
+        return True
+    except Exception as e:                      # noqa: BLE001
+        log_line("切换任务栏显示失败：%r" % (e,))
+        return False
 
 
 def _claim_single_instance() -> bool:
@@ -316,7 +371,7 @@ class App(tk.Tk):
         self._shown_pos = None
         self._hidden_pos = None
         self._docked_shown = False              # 贴边后当前是否处于"滑出"状态
-        self._leave_at = 0.0
+        self._in_taskbar = True                 # 隐藏时连任务栏也不显示
 
         self._dragging = False                  # 正在拖动（拖时不判贴边）
         self._drag_off = None                   # 按下点相对窗口左上角的偏移
@@ -392,8 +447,8 @@ class App(tk.Tk):
                 log_line("    " + _line)
             try:
                 self.watcher = watcher.Watcher(
-                    env, self.vault, interval=2.0, on_event=self._on_capture,
-                    on_log=self._on_watch_log)
+                    env, self.vault, interval=0.6, on_event=self._on_capture,
+                    on_log=self._on_watch_log, on_change=self._on_status_change)
                 self.watcher.start()
                 login.clean_temp(env)           # 上次遗留的 .livebak 清掉
             except Exception as e:              # noqa: BLE001
@@ -698,6 +753,10 @@ class App(tk.Tk):
     def _on_watch_log(self, text: str) -> None:
         self.after(0, lambda: self.var_status.set(text))
 
+    def _on_status_change(self, st: dict) -> None:
+        """监控线程发现在线状态变了 → 主线程立刻重画（不等轮询）。"""
+        self.after(0, self._update_status)
+
     def _tick(self) -> None:
         try:
             self._update_status()
@@ -781,6 +840,7 @@ class App(tk.Tk):
         self._dock = None
         self._shown_pos = self._hidden_pos = None
         self._docked_shown = False
+        self._set_taskbar(True)
         self._dragging = True
         self._drag_off = (event.x_root - self.winfo_x(),
                           event.y_root - self.winfo_y())
@@ -828,13 +888,15 @@ class App(tk.Tk):
             self._dock = None
             self._shown_pos = self._hidden_pos = None
             self._docked_shown = False
+            self._set_taskbar(True)
 
     def _enter_dock(self, y: int, w: int, sw: int) -> None:
-        """进入右侧贴边态：完全贴住右边，只在屏内留一条细缝。"""
+        """进入右侧贴边态：完全滑出屏幕，并把窗口从任务栏摘掉。"""
         self._dock = "right"
         self._shown_pos = (sw - w, y)
-        self._hidden_pos = (sw - DOCK_PEEK_SIDE, y)
+        self._hidden_pos = (sw + 2, y)          # 整个窗口挪到屏幕右外侧
         self._docked_shown = False
+        self._set_taskbar(False)
         self._slide_to(*self._hidden_pos)
 
     def _slide_to(self, tx: int, ty: int) -> None:
@@ -866,26 +928,32 @@ class App(tk.Tk):
             pass
         self.after(DOCK_POLL, self._poll_pointer)
 
+    def _set_taskbar(self, show: bool) -> None:
+        """贴边隐藏时窗口在任务栏里也一并消失；滑出时恢复。"""
+        if self._in_taskbar == show:
+            return
+        if _taskbar_visible(self, show):
+            self._in_taskbar = show
+
     def _pointer_tick(self) -> None:
         if self._dock != "right":
             return
         mx, my = self.winfo_pointerxy()
         x, y, w, h, sw, sh = self._geometry_now()
-        # 只有"鼠标靠近右边缘细缝"才算要滑出
-        hot = mx >= sw - DOCK_PEEK_SIDE - DOCK_HOT and y <= my <= y + h
+        # 鼠标靠近屏幕右边缘 ⇒ 滑出显示
+        hot = mx >= sw - DOCK_HOT
         inside = x <= mx <= x + w and y <= my <= y + h
 
         if hot and not self._docked_shown:
-            self._slide_to(*self._shown_pos)
             self._docked_shown = True
-            self._leave_at = time.time()
+            self._set_taskbar(True)
+            self._slide_to(*self._shown_pos)
             return
-        if self._docked_shown:
-            if inside:
-                self._leave_at = time.time()
-            elif time.time() - self._leave_at > DOCK_HIDE_DELAY / 1000.0:
-                self._slide_to(*self._hidden_pos)
-                self._docked_shown = False
+        if self._docked_shown and not inside:
+            # 鼠标一离开窗口立即隐藏，不做等待
+            self._docked_shown = False
+            self._slide_to(*self._hidden_pos)
+            self._set_taskbar(False)
 
     def _poll_show_event(self) -> None:
         """轮询"请显示窗口"信号（第二个实例被单实例闸门拦下时发的）。"""
@@ -908,6 +976,7 @@ class App(tk.Tk):
                 self._dock = None
                 self._shown_pos = self._hidden_pos = None
                 self._docked_shown = False
+                self._set_taskbar(True)
                 sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
                 w, h = self.winfo_width(), self.winfo_height()
                 self._slide_to(max(0, sw - w - 60),
@@ -966,13 +1035,9 @@ class App(tk.Tk):
 
     def _do_login(self, acc) -> dict:
         """登录一个账号。"""
-        hidden = []
-        try:
-            with ui.ui_scope():
-                return login.login_account(self.env, self.vault, acc,
-                                           log=self._log_login, hidden=hidden)
-        finally:
-            login.restore_windows(hidden, log=self._log_login)
+        with ui.ui_scope():
+            return login.login_account(self.env, self.vault, acc,
+                                       log=self._log_login)
 
     def on_login(self, acc) -> None:
         if self._locked:

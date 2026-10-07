@@ -9,13 +9,14 @@ from . import collect, slot
 
 
 class Watcher:
-    def __init__(self, env, vault, interval: float = 2.0, on_event=None,
-                 on_log=None) -> None:
+    def __init__(self, env, vault, interval: float = 0.6, on_event=None,
+                 on_log=None, on_change=None) -> None:
         self.env = env
         self.vault = vault
         self.interval = interval
         self.on_event = on_event            # on_event(kind, payload)
         self.on_log = on_log or (lambda _t: None)
+        self.on_change = on_change or (lambda _st: None)  # 在线状态变化时立即回调
 
         self._stop = threading.Event()
         self._th = None
@@ -25,6 +26,7 @@ class Watcher:
         self._last_host = {}                # wxid -> 上次采集 host 时刻
         self.cfg_gap = 6.0
         self.host_gap = 6.0
+        self._last_seen = None              # 上一轮的在线摘要，用于变化通知
         self.status = self._blank()
 
     @staticmethod
@@ -80,11 +82,24 @@ class Watcher:
         self.status = st
         if st["instances"] and online and not self._pausing():
             self._collect(online, live)
+        # 在线条目或实例数变了 ⇒ 立刻通知界面，不必等它自己的轮询
+        seen = (tuple(sorted(online.items())), st["instances"])
+        if seen != self._last_seen:
+            self._last_seen = seen
+            if self.on_change:
+                try:
+                    self.on_change(st)
+                except Exception:               # noqa: BLE001
+                    pass
         return st
 
     def _collect(self, online: dict, live: dict) -> None:
         now = time.time()
-        live_wxid = live.get("wxid") or ""
+        # ★ 不能只看 live 的 wxid：微信退出时会把 live config 清空（wxid=''），
+        #   而登录期间也可能短暂为空 ⇒ 门槛形同虚设，采集永远不触发。
+        #   改用 resolve_live_account：live 无 wxid 时回退"槽位 uin 锚点 → 档案"。
+        live_wxid, _uin, _src = collect.resolve_live_account(
+            self.env, self.vault, live)
 
         # 1) live 归属账号：完整采集（config 对 + host + 头像）
         if live_wxid and now - self._last_cfg.get(live_wxid, 0.0) >= self.cfg_gap:

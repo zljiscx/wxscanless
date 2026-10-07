@@ -58,10 +58,6 @@ MK_LBUTTON = 0x0001
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 
-SW_HIDE = 0                      # 隐藏窗口
-SW_SHOW = 5                      # 按当前状态显示
-SW_RESTORE = 9                   # 从最小化/隐藏状态恢复并激活
-
 # 点「进入微信」的级联顺序（一招没反应就换下一招，不是同招反复发）：
 #   key-win    键盘 VK_RETURN → 窗口句柄
 #   mouse-btn  鼠标三连      → 按钮句柄
@@ -345,7 +341,16 @@ def has_button(win, name: str) -> bool:
     return _find_button(win, name) is not None
 
 
-QR_WORDS = ("二维码", "扫码登录", "扫描二维码", "二维码登录", "扫一扫登录")
+# 实测（2026-10-07 抓真实扫码页）：整页只有 9 个控件名 ——
+#   微信 / 关闭 / 网络代理设置 / 二维码 / 扫码登录 / 仅传输文件
+# ★ 扫码页**没有**「切换账号」（那是"有登录态"时才有的），故它只能当兜底判据。
+QR_WORDS = ("扫码登录", "二维码", "扫描二维码", "二维码登录", "扫一扫登录",
+            "重新扫码", "扫码验证")
+
+# 「需在手机上完成登录」页的正向文案（首次登录/设备未勾选自动登录时出现）
+PHONE_WORDS = ("需在手机上完成登录", "需在手机上确认", "需要通过手机确认",
+               "需手机确认", "手机确认", "正在确认安全验证结果",
+               "安全验证", "确认登录")
 
 
 def _iter_controls(root, max_depth: int = 14, max_nodes: int = 0):
@@ -372,21 +377,11 @@ def qr_evidence(win) -> str:
     """二维码页的正向证据（空串 = 没有证据）。"""
     if win is None:
         return ""
-    names = []
-    for ctrl, _d in _iter_controls(win, 8, max_nodes=600):
-        try:
-            nm = (ctrl.Name or "").strip()
-        except Exception:                       # noqa: BLE001
-            continue
-        if not nm:
-            continue
-        names.append(nm)
-        for w in QR_WORDS:
-            if w in nm:
-                return "文本:%s" % nm[:24]
-    if BTN_SWITCH in names and BTN_ENTER not in names:
-        return "无进入微信但有切换账号"
-    return ""
+    try:
+        state, _nick, why = login_state(win)
+    except Exception:                           # noqa: BLE001
+        return ""
+    return why if state == ST_QR else ""
 
 
 def shows_qr(win) -> bool:
@@ -399,15 +394,32 @@ def shows_qr(win) -> bool:
 
 ST_ONE_CLICK = "one_click"   # 有登录态：显示头像+昵称，有「进入微信」
 ST_QR = "qr"                 # 无登录态 / 票据被服务端拒：直接是二维码页
+ST_PHONE = "phone"           # 票据有效但需在手机上确认：登录本身会成功
+ST_FAIL = "fail"             # 服务端明确拒绝：登录失败/需重试
 ST_LOADING = "loading"       # 窗口在，但控件树还没建好（启动后一瞬间）
 ST_GONE = "gone"             # 登录窗口对象已失效
 
 STATE_CN = {
     ST_ONE_CLICK: "一键登录（有登录态）",
     ST_QR: "扫码登录（无登录态/票据被拒）",
+    ST_PHONE: "待手机确认（票据有效，需在手机上点确认）",
+    ST_FAIL: "登录被服务端拒绝（需重试）",
     ST_LOADING: "登录页加载中",
     ST_GONE: "登录窗口已消失",
 }
+
+# 服务端拒绝的失败文案（出现即判失败，别再傻等主界面）
+FAIL_WORDS = ("未能登录", "登录失败", "请检查网络设置后再试",
+              "账号已登录", "该账号已登录", "正在升级中，请稍后再试")
+
+
+def _hit(names, words):
+    """names 里命中任一关键词即返回该词，否则返回空串。"""
+    for nm in names:
+        for w in words:
+            if w in nm:
+                return w
+    return ""
 
 
 def login_state(win) -> tuple:
@@ -426,16 +438,27 @@ def login_state(win) -> tuple:
                 continue
             if not nick and nm.startswith(PREFIX_USER):
                 nick = nm[len(PREFIX_USER):].strip()
-            for w in QR_WORDS:                  # 二维码字样优先：出现即定性
-                if w in nm:
-                    return ST_QR, nick, "二维码证据:%s" % nm[:20]
             names.append(nm)
     except Exception as e:                      # noqa: BLE001
         return ST_GONE, nick, "读取失败:%s" % e
 
+    f = _hit(names, FAIL_WORDS)
+    if f:
+        return ST_FAIL, nick, "失败文案:%s" % f[:20]
+
+    # 二维码优先于「切换账号」：切号按钮在二维码页也存在
+    q = _hit(names, QR_WORDS)
+    if q:
+        return ST_QR, nick, "二维码证据:%s" % q[:20]
+
+    p = _hit(names, PHONE_WORDS)
+    if p:
+        return ST_PHONE, nick, "手机确认:%s" % p[:20]
+
     if BTN_ENTER in names:
         return ST_ONE_CLICK, nick, "有「进入微信」"
     if BTN_SWITCH in names:
+        # 兜底：有「切换账号」而无「进入微信」⇒ 二维码页
         return ST_QR, nick, "有「切换账号」但无「进入微信」"
     if not names:
         return ST_LOADING, nick, "控件树为空"
@@ -522,6 +545,58 @@ GONE_GRACE = 12.0     # 登录窗口消失后，再等这么多秒看主界面�
 CLICK_RETRY = 0.4     # 一招发出后没反应就换下一招的等待
 MAX_CLICKS = len(CLICK_METHODS)  # 级联走满一遍即止
 QR_CHECK_EVERY = 0.8  # 二维码证据检查限频（遍历控件树较贵，不必每轮都做）
+PHONE_CHECK_EVERY = 1.0  # 等主界面期间查"手机确认页"的限频（1 秒一次足够）
+
+
+def _wait_main(win, timeout: float, poll: float, pid: int,
+               appeared, log, last_state: list) -> str:
+    """等主界面出现的全过程中持续查登录页状态，并及时播报。
+
+    手机确认页要等用户去手机上点，所以一识别出来就提示；期间主界面一出现即返回。
+    last_state 是 [状态, 证据] 的共享容器，返回后供调用方判最终结论。
+    本实例进程退出即返回 "exited"，不再空等。
+    """
+    from . import process as _proc
+
+    def main_pids_of():
+        return _proc.main_pids()
+
+    end = time.time() + timeout
+    told_phone = [False]
+    told_qr = [False]
+    told_fail = [False]
+    next_probe = [0.0]
+    while time.time() < end:
+        if appeared():
+            return "main"
+        if pid and pid not in main_pids_of():
+            # 本实例进程没了（用户关掉了）⇒ 别再空等
+            log("  本实例进程已退出，停止等待主界面")
+            return "exited"
+        now = time.time()
+        if now >= next_probe[0]:
+            next_probe[0] = now + PHONE_CHECK_EVERY
+            try:
+                w = login_window_of(pid) if pid else find_login_window()
+                if w is not None:
+                    st, _nick, why = login_state(w)
+                    # 已经确认在等手机确认时，别被后来的"窗口消失"降级覆盖
+                    if st != ST_GONE or last_state[0] != ST_PHONE:
+                        last_state[0], last_state[1] = st, why
+                    if st == ST_PHONE and not told_phone[0]:
+                        told_phone[0] = True
+                        log("  ⚠ 需要你在手机微信上点确认才能继续（%s）" % why)
+                    if st == ST_QR and not told_qr[0]:
+                        told_qr[0] = True
+                        log("  ✗ 登录页已切为二维码（%s）—— 票据被拒，"
+                            "需重新扫码采集登录态" % why)
+                    if st == ST_FAIL and not told_fail[0]:
+                        told_fail[0] = True
+                        log("  ✗ 服务端拒绝了本次登录（%s）" % why)
+            except Exception as e:              # noqa: BLE001
+                log("  查登录页状态异常：%r" % (e,))
+        time.sleep(poll)
+    return ""
 
 
 def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
@@ -550,35 +625,6 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         since[0] = 0.0
         return False
 
-    def poll_until(timeout: float, allow_qr: bool = True,
-                   watch_button: bool = False) -> str:
-        end = time.time() + timeout
-        qr_since = 0.0
-        gone_at = 0.0
-        while time.time() < end:
-            if appeared():
-                return "main"
-            lw = login_window_of(pid) if pid else find_login_window()
-            if lw is None:
-                if not gone_at:
-                    gone_at = time.time()
-                elif time.time() - gone_at >= GONE_GRACE:
-                    return "gone"
-            else:
-                gone_at = 0.0
-                if allow_qr and qr_evidence(win):
-                    if not qr_since:
-                        qr_since = time.time()
-                    elif time.time() - qr_since >= QR_STABLE:
-                        return "qr"
-                else:
-                    qr_since = 0.0
-                    # 无二维码证据 + 按钮已消失 → 正在进主界面，立即转入等待
-                    if watch_button and not has_button(win, BTN_ENTER):
-                        return "entering"
-            time.sleep(poll)
-        return ""
-
     if ready > 0:
         t0 = time.time()
         end = t0 + ready
@@ -600,12 +646,18 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
                 return False, "qr"
             time.sleep(poll)
         if not hit:
-            log("  %.0f 秒内未等到「进入微信」按钮" % ready)
+            st, _nick, why = login_state(win)
+            if st == ST_PHONE:
+                log("  登录页要求在手机上确认登录（%s）—— 票据有效，"
+                    "等手机点确认" % why)
+                return False, "phone"
+            log("  %.0f 秒内未等到「进入微信」按钮（%s）" % (ready, why))
             return False, ""
 
     sent_any = False
     attempts = 0
     gone = False
+    seen_phone = False                   # 已确认登录页在等手机确认
     end = time.time() + wait
     qr_since, qr_next = [0.0], [0.0]
     while time.time() < end and not gone:
@@ -616,8 +668,23 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         except Exception:                       # noqa: BLE001
             still = True
         if not still:
-            # 按钮已消失且无二维码证据 → 正在进入，别再点
-            log("  「进入微信」已消失（无二维码证据）→ 判为正在进入，停止重试")
+            # 按钮消失有两种可能：正在进入，或页面换了状态。先查异常证据
+            st, _nick, why = login_state(win)
+            if st == ST_QR:
+                log("  「进入微信」已消失，登录页是二维码页（%s）→ 票据被拒"
+                    % why)
+                return False, "qr"
+            if st == ST_FAIL:
+                log("  「进入微信」已消失，服务端拒绝（%s）" % why)
+                return False, "fail"
+            if st == ST_PHONE:
+                log("  登录页要求在手机上确认登录（%s）→ 停止点击，等手机确认"
+                    % why)
+                sent_any = True
+                seen_phone = True
+                break
+            # 无二维码/失败/手机确认证据 → 正在进入主界面
+            log("  「进入微信」已消失（无异常证据）→ 判为正在进入，停止重试")
             sent_any = True
             break
         if qr_stable(qr_since, qr_next):
@@ -642,6 +709,7 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
         log("  第 %d 招「%s」已发出" % (attempts, CLICK_CN.get(m, m)))
         # 确认 CLICK_RETRY 秒：主界面出现或按钮消失就早退，否则换下一招
         t1 = time.time() + CLICK_RETRY
+        stopped = ""                          # 非空 = 该退出点击循环了
         while time.time() < t1:
             if appeared():
                 log("  点击生效（第 %d 招「%s」，%.2f 秒进入主界面）"
@@ -649,21 +717,44 @@ def click_enter(win, wait: float = 25.0, log=print, base_main: int = 0,
                 return True, CLICK_CN.get(m, m)
             try:
                 if not has_button(win, BTN_ENTER):
-                    log("  「进入微信」已消失 → 判定为正在进入"
-                        "（第 %d 招已生效，转等主界面）" % attempts)
-                    gone = True                 # 按钮消失 = 正在进主界面
+                    # 按钮消失 ≠ 一定在进主界面：页面可能换成了手机确认/二维码/失败
+                    st, _nick, why = login_state(win)
+                    if st == ST_PHONE:
+                        log("  按钮消失，登录页要求在手机上确认（%s）" % why)
+                        stopped = "phone"
+                    elif st in (ST_QR, ST_FAIL):
+                        log("  按钮消失，登录页已变为%s（%s）"
+                            % (STATE_CN[st], why))
+                        stopped = st
+                    else:
+                        log("  「进入微信」已消失（无异常证据）→ 判定为正在进入"
+                            "（第 %d 招已生效，转等主界面）" % attempts)
+                        gone = True         # 按钮消失 = 正在进主界面
                     break
             except Exception:                   # noqa: BLE001
                 pass
             time.sleep(poll)
+        if stopped:
+            if stopped == ST_PHONE:
+                sent_any = True                # 点过了，等手机即可
+                break
+            return False, stopped
 
     if sent_any or gone:
         log("  宽限等待（最多 %.0f 秒，只等主界面）" % grace)
-        if poll_until(grace, allow_qr=False) == "main":
+        _last_state = [ST_PHONE if seen_phone else ST_LOADING, ""]
+        r = _wait_main(win, grace, poll, pid, appeared, log, _last_state)
+        if r == "main":
             log("  主界面已出现（宽限等待）")
             return True, "宽限等待"
-        if qr_evidence(win):
-            return False, "qr"
+        if r == "exited":
+            return False, "exited"
+        st, why = _last_state[0], _last_state[1]
+        if st == ST_PHONE:
+            log("  仍在等待手机确认（%s）" % why)
+            return False, "phone"
+        if st in (ST_QR, ST_FAIL):
+            return False, st
     return False, ""
 
 
@@ -680,57 +771,6 @@ def main_window_of(pid: int):
     """取某个进程的主界面窗口（多开时用来定位具体是哪个实例）。"""
     ws = _windows_of_class(MAIN_CLASS, pid)
     return ws[0] if ws else None
-
-
-def hide_main_window(win, log=print) -> int:
-    """把主界面窗口隐藏起来（进程与登录态全部保留），返回被隐藏的窗口句柄。"""
-    if win is None:
-        return 0
-    hwnd = _native_handle(win)
-    if not hwnd:
-        log("  主窗口没有原生句柄，无法隐藏")
-        return 0
-    h = int(hwnd)
-    log("  隐藏主窗口（SW_HIDE，不触发微信的关闭逻辑）")
-    try:
-        _user32.ShowWindow(wintypes.HWND(h), SW_HIDE)
-    except Exception as e:                      # noqa: BLE001
-        log("  隐藏窗口失败：%r" % (e,))
-        return 0
-    return h
-
-
-def close_window(hwnd: int, log=print) -> bool:
-    """（兜底专用）对窗口补发 WM_CLOSE，走微信自己的关闭到托盘逻辑。"""
-    if not hwnd:
-        return False
-    h = int(hwnd)
-    try:
-        if not _user32.IsWindow(wintypes.HWND(h)):
-            return False
-        log("  对窗口 %s 补发 WM_CLOSE（兜底：让它进入微信的托盘状态）" % h)
-        return _post(h, WM_CLOSE, 0, 0)
-    except Exception as e:                      # noqa: BLE001
-        log("  补发 WM_CLOSE 失败：%r" % (e,))
-        return False
-
-
-def show_window(hwnd: int, log=print) -> bool:
-    """把隐藏的主窗口原样显示回来。"""
-    if not hwnd:
-        return False
-    h = int(hwnd)
-    try:
-        if not _user32.IsWindow(wintypes.HWND(h)):
-            return False                        # 账号已被用户退出，句柄已失效
-        _user32.ShowWindow(wintypes.HWND(h), SW_SHOW)
-        if not _user32.IsWindowVisible(wintypes.HWND(h)):
-            _user32.ShowWindow(wintypes.HWND(h), SW_RESTORE)    # 兜底
-        log("  已把窗口 %s 显示回来" % h)
-        return True
-    except Exception as e:                      # noqa: BLE001
-        log("  显示窗口失败：%r" % (e,))
-        return False
 
 
 def wait_login_window_gone(timeout=60) -> bool:

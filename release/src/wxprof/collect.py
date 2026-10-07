@@ -8,6 +8,8 @@ import time
 from . import avatar, file_md5, mmkv, slot
 from .vault import Account, Vault
 
+INSTANCE_ORDER = slot.INSTANCE_DIRS
+
 
 def live_config_path(env) -> str:
     return os.path.join(env.config_dir, "global_config") if env.config_dir else ""
@@ -52,8 +54,26 @@ def resolve_wxid(env, slot_name: str, uin: int, live: dict, vault) -> str:
     return slot.wxid_in_slot(env, slot_name, uin)
 
 
-def online_accounts(env, vault, live: dict = None) -> dict:
-    """当前已登录的账号：{wxid: 槽位}。"""
+def slot_account_of(env, vault, slot_name: str) -> str:
+    """该槽位当前住的是哪个账号（wxid）；认不出返回空串。
+
+    用 uin 锚点 + 档案反查，这是槽位归属唯一可靠的实时依据。
+    """
+    u = slot.current_uin(env, slot_name)
+    if not u:
+        return ""
+    acc = vault.by_uin(u) if vault else None
+    return acc.wxid if acc is not None else ""
+
+
+def online_accounts(env, vault, live: dict = None,
+                     require_login: bool = True) -> dict:
+    """当前已登录的账号：{wxid: 槽位}。
+
+    require_login=True 时额外要求该槽位**登录窗口已消失**（=已进主界面）。
+    只靠 kvcomm 锚点会误报：微信停在登录界面时不写新 uin、也不清旧 uin。
+    ⚠ 不能用"主界面窗口是否可见"当判据 —— 主窗口隐藏/最小化会被误判成离线。
+    """
     if live is None:
         live = live_summary(env)
     out = {}
@@ -63,6 +83,8 @@ def online_accounts(env, vault, live: dict = None) -> dict:
         u = slot.current_uin(env, name)
         if not u:
             continue
+        if require_login and not slot.slot_logged_in(env, name):
+            continue
         w = resolve_wxid(env, name, u, live, vault)
         if w:
             out[w] = name
@@ -70,8 +92,15 @@ def online_accounts(env, vault, live: dict = None) -> dict:
 
 
 def refresh_host(env, vault: Vault, acc: Account, slot_name: str) -> bool:
-    """只刷新某个在线账号的 host，返回是否真的更新了。"""
+    """只刷新某个在线账号的 host，返回是否真的更新了。
+
+    防串档靠**槽位归属**（该槽位的 uin 锚点是不是本账号），而不是"线路与档案
+    是否一致" —— 档案本身可能是旧的/被污染的，拿它当基准会拒绝正确的更新。
+    """
     if not slot_name or acc is None:
+        return False
+    owner = slot_account_of(env, vault, slot_name)
+    if owner and owner != acc.wxid:
         return False
     fp = slot.host_fingerprint(env, slot_name)
     digest = slot.fp_digest(fp)
@@ -86,6 +115,30 @@ def refresh_host(env, vault: Vault, acc: Account, slot_name: str) -> bool:
     return True
 
 
+def resolve_live_account(env, vault, live: dict = None):
+    """判定"当前线上的是哪个账号"，返回 (wxid, uin, 来源说明)。
+
+    live config 的 wxid 会被微信**清空**（退出后实测 auth_len=0、wxid=''），
+    所以不能只认它；回退到"槽位 uin 锚点 → 档案 by_uin"这条独立链路。
+    """
+    if live is None:
+        live = live_summary(env)
+    wxid = live.get("wxid") or ""
+    if wxid:
+        return wxid, int(live.get("uin_dec") or 0), "live config"
+    # 回退：任一槽位的当前 uin 若能对应到档案账号，就认为是它
+    for name in INSTANCE_ORDER:
+        if not slot.slot_busy(env, name):
+            continue
+        u = slot.current_uin(env, name)
+        if not u:
+            continue
+        acc = vault.by_uin(u) if vault else None
+        if acc is not None:
+            return acc.wxid, u, "槽位 %s 的 uin 锚点" % name
+    return "", int(live.get("uin_dec") or 0), ""
+
+
 def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict:
     """采集当前 live config 所属的账号。返回结果摘要 dict。"""
     res = {"ok": False, "new": False, "changed": [], "wxid": "", "uin": 0,
@@ -95,12 +148,14 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
         return res
 
     s = live_summary(env)
-    wxid = s.get("wxid") or ""
+    wxid, uin, src = resolve_live_account(env, vault, s)
     if not wxid:
-        res["detail"] = "live config 里没有账号信息（未登录）"
+        res["detail"] = "无法判定当前线上账号（live config 为空且槽位无账号锚点）"
         return res
+    if src != "live config":
+        log("  live config 里没有账号信息（微信退出时会清空），改用 %s 判定"
+            % src)
 
-    uin = int(s.get("uin_dec") or 0)
     nick = s.get("nickname") or ""
     url = s.get("head_img_url") or ""
     has_ticket = bool(s.get("auth_len"))
@@ -125,6 +180,16 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
                 log("  config 未保存：%s" % err)
 
     slot_name = locate_slot(env, vault, uin) if uin else ""
+    # 槽位必须是**本账号自己铺的**才能采host。
+    # ⚠ 不能用"线路与档案是否一致"当判据：档案本身可能是旧的/被污染的
+    #   （实测档案是 sz 线、槽位却是登录器铺的正确默认线），那样会拒绝**正确**更新，
+    #   把采集彻底堵死。真正要防的是"槽位属于**别的账号**"。
+    if slot_name:
+        owner = slot_account_of(env, vault, slot_name)
+        if owner and owner != wxid:
+            log("  跳过 host 采集：槽位 %s 属于账号 %s，不是本账号"
+                % (slot_name, owner[:12]))
+            slot_name = ""
     if slot_name:
         digest = slot.fp_digest(slot.host_fingerprint(env, slot_name))
         if digest and digest != acc.host_fp:
@@ -134,7 +199,7 @@ def collect_live(env, vault: Vault, log=print, want_avatar: bool = True) -> dict
                 acc.slot = slot_name
                 changed.append("host")
     elif uin:
-        res["detail"] = "当前没有槽位记录该账号（未登录成功），暂不采 host"
+        res["detail"] = "当前没有可用槽位记录该账号（未登录成功），暂不采 host"
 
     if want_avatar and url:
         png = vault.avatar_path(wxid)

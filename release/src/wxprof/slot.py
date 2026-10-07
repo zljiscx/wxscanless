@@ -7,7 +7,10 @@ import hashlib
 import os
 import re
 import shutil
+import time
 from ctypes import wintypes
+
+from . import file_md5 as file_md5_of
 
 # 微信的实例槽位，按下标即"第几个实例"；上限 4
 INSTANCE_DIRS = ("net", "net_1", "net_2", "net_3")
@@ -41,6 +44,80 @@ def exclusive_open_ok(path: str) -> bool:
     return False
 
 
+# Restart Manager：反查占用某文件的进程 PID（供槽位与进程精准对应）
+_CCH_RM_SESSION_KEY = 32
+
+
+class _RM_UNIQUE_PROCESS(ctypes.Structure):
+    _fields_ = [("dwProcessId", ctypes.c_uint32),
+                ("ProcessStartTime", ctypes.c_uint64)]
+
+
+class _RM_PROCESS_INFO(ctypes.Structure):
+    _fields_ = [("Process", _RM_UNIQUE_PROCESS),
+                ("strAppName", ctypes.c_wchar * 256),
+                ("strServiceShortName", ctypes.c_wchar * 64),
+                ("ApplicationType", ctypes.c_int),
+                ("AppStatus", ctypes.c_uint32),
+                ("TSSessionId", ctypes.c_uint32),
+                ("bRestartable", ctypes.c_int)]
+
+
+def file_owner_pids(path: str) -> list:
+    """占用该文件的进程 PID（Restart Manager 反查，失败返回 []）。"""
+    try:
+        rm = ctypes.windll.LoadLibrary("rstrtmgr.dll")
+    except Exception:
+        return []
+    try:
+        rm.RmStartSession.restype = ctypes.c_uint32
+        rm.RmStartSession.argtypes = [ctypes.POINTER(ctypes.c_uint32),
+                                      ctypes.c_uint32, ctypes.c_wchar_p]
+        rm.RmRegisterResources.restype = ctypes.c_uint32
+        rm.RmRegisterResources.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
+                                           ctypes.POINTER(ctypes.c_wchar_p),
+                                           ctypes.c_uint32, ctypes.c_void_p,
+                                           ctypes.c_uint32, ctypes.c_void_p]
+        rm.RmGetList.restype = ctypes.c_uint32
+        rm.RmGetList.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32),
+                                 ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+                                 ctypes.POINTER(ctypes.c_uint32)]
+        rm.RmEndSession.restype = ctypes.c_uint32
+        rm.RmEndSession.argtypes = [ctypes.c_uint32]
+    except Exception:
+        return []
+    sess = ctypes.c_uint32(0)
+    key = ctypes.create_unicode_buffer(_CCH_RM_SESSION_KEY + 1)
+    if rm.RmStartSession(ctypes.byref(sess), 0, key) != 0:
+        return []
+    try:
+        files = (ctypes.c_wchar_p * 1)(path)
+        if rm.RmRegisterResources(sess, 1, files, 0, None, 0, None) != 0:
+            return []
+        needed = ctypes.c_uint32(0)
+        filled = ctypes.c_uint32(0)
+        reason = ctypes.c_uint32(0)
+        rm.RmGetList(sess, ctypes.byref(needed), ctypes.byref(filled), None,
+                     ctypes.byref(reason))
+        n = needed.value
+        if n == 0:
+            return []
+        buf = (ctypes.c_byte * (n * ctypes.sizeof(_RM_PROCESS_INFO)))()
+        filled.value = n
+        if rm.RmGetList(sess, ctypes.byref(needed), ctypes.byref(filled), buf,
+                        ctypes.byref(reason)) != 0:
+            return []
+        arr = (_RM_PROCESS_INFO * filled.value).from_buffer_copy(buf)
+        return [p.Process.dwProcessId for p in arr if p.Process.dwProcessId]
+    except Exception:
+        return []
+    finally:
+        try:
+            rm.RmEndSession(sess)
+        except Exception:
+            pass
+
+
 def slot_root(env) -> str:
     return env.appdata_dir or ""
 
@@ -72,12 +149,23 @@ def free_slots(env) -> list:
     return [n for n in INSTANCE_DIRS if not slot_busy(env, n)]
 
 
-def free_slot(env) -> str:
-    """新实例会落到的槽位 = 下标最小的空闲槽位；没有空闲位返回空串。"""
+def free_slot(env, want_host: str = "") -> str:
+    """新实例会落到的槽位 = 下标最小的空闲槽位；没有返回空串。
+
+    ★ 必须与微信的分配规则**完全一致**（下标最小），不能自作聪明地按线路
+    "挑一个同源的" —— 铺进非最小空闲槽位的 host，微信根本不会去读那个槽位，
+    结果就是 host 白铺、登录页切二维码（实测小号被铺到 net_2 后跳扫码）。
+    """
     for name in INSTANCE_DIRS:
         if not slot_busy(env, name):
             return name
     return ""
+
+
+def pick_slot(env, want_host: str = "") -> tuple:
+    """选目标槽位，返回 (槽位名, 是否强制)。强制=True =槽位已满以外的情况。"""
+    name = free_slot(env)
+    return (name, False) if name else ("", False)
 
 
 def kvcomm_dir(env, name: str) -> str:
@@ -101,52 +189,70 @@ def monitordata_uins(env, name: str) -> list:
     return sorted(set(out))
 
 
-def _mon_entries(env, name: str) -> tuple:
-    """返回 (`monitordata_0` 的 mtime, [(uin, mtime), ...])。"""
+def monitordata_locked_uin(env, name: str) -> int:
+    """被微信占用（无法独占打开）的 monitordata 文件对应的 uin；无则 0。"""
     d = kvcomm_dir(env, name)
     if not os.path.isdir(d):
-        return 0.0, []
+        return 0
+    locked = []
     try:
         names = os.listdir(d)
     except OSError:
-        return 0.0, []
-    zero = 0.0
-    cands = []
+        return 0
     for fn in names:
         m = _MON.match(fn)
-        if not m:
+        if not m or m.group(1) == "0":
+            continue
+        p = os.path.join(d, fn)
+        if exclusive_open_ok(p):        # 能独占打开 = 未被占用
             continue
         try:
-            mt = os.path.getmtime(os.path.join(d, fn))
+            mt = os.path.getmtime(p)
         except OSError:
+            mt = 0.0
+        locked.append((int(m.group(1)), mt))
+    if not locked:
+        return 0
+    return max(locked, key=lambda x: x[1])[0]
+
+
+_OWNER_TTL = 2.0
+_OWNER_CACHE = {}
+
+
+def slot_owner_pid(env, name: str) -> int:
+    """被微信占用的 monitordata 文件由哪个 PID 持有；无法确定返回 0。"""
+    d = kvcomm_dir(env, name)
+    if not os.path.isdir(d):
+        return 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    now = time.time()
+    for fn in names:
+        m = _MON.match(fn)
+        if not m or m.group(1) == "0":
             continue
-        if m.group(1) == "0":
-            zero = max(zero, mt)
-        else:
-            cands.append((int(m.group(1)), mt))
-    return zero, cands
-
-
-# monitordata_0 与某 uin 的 mtime 相差在该秒数内 ⇒ 视为同一次写入
-_MON_CLUSTER = 3.0
+        p = os.path.join(d, fn)
+        if exclusive_open_ok(p):
+            continue
+        cached = _OWNER_CACHE.get(name)
+        if cached and cached[1] > now:
+            return cached[0]
+        pids = file_owner_pids(p)
+        pid = pids[0] if pids else 0
+        _OWNER_CACHE[name] = (pid, now + _OWNER_TTL)
+        return pid
+    _OWNER_CACHE.pop(name, None)
+    return 0
 
 
 def current_uin(env, name: str) -> int:
-    """该槽位当前登录账号的 uin；没有（未登录 / 停在登录页 / 已登出）返回 0。"""
-    zero, cands = _mon_entries(env, name)
-    if not cands:
+    """该槽位当前登录账号的 uin；未登录/停在登录页/已登出返回 0。"""
+    if not slot_busy(env, name):
         return 0
-    best, best_mt = 0, 0.0
-    for uin, mt in cands:
-        if mt > best_mt:
-            best, best_mt = uin, mt
-    if not best:
-        return 0
-    if zero <= 0:
-        return best                     # 没有 `_0` 标记 ⇒ 确实有账号
-    if abs(best_mt - zero) < _MON_CLUSTER:
-        return 0                        # 与 `_0` 同批写入 ⇒ 那是登出，不是在线
-    return best
+    return monitordata_locked_uin(env, name)   # 锁定的那份 = 当前在线账号；无锁 = 无在线账号
 
 
 def slot_of_uin(env, uin: int) -> str:
@@ -277,6 +383,27 @@ def install_host(env, name: str, src_host: str) -> int:
     return mirror_host(src_host, host_dir(env, name))
 
 
+def slot_logged_in(env, name: str) -> bool:
+    """该槽位是否**已登录进主界面**（判在线用，靠登录窗口是否消失）。"""
+    from . import process, ui
+    pids = process.main_pids_ordered()
+    pid = slot_owner_pid(env, name)
+    if pid and pid in pids:
+        try:
+            return ui.login_window_of(pid) is None
+        except Exception:                       # noqa: BLE001
+            return False
+    order = [n for n in INSTANCE_DIRS if slot_busy(env, n)]
+    for i, nm in enumerate(order):
+        if nm != name or i >= len(pids):
+            continue
+        try:
+            return ui.login_window_of(pids[i]) is None
+        except Exception:                       # noqa: BLE001
+            return False
+    return False
+
+
 def summary(env) -> dict:
     """给界面/日志用的一份槽位概览。"""
     out = {}
@@ -286,5 +413,6 @@ def summary(env) -> dict:
             "busy": slot_busy(env, name),
             "uins": monitordata_uins(env, name),      # 历史累积（诊断用）
             "current": current_uin(env, name),        # 当前账号（判在线用）
+            "locked_uin": monitordata_locked_uin(env, name),  # 被占用的那份
         }
     return out
