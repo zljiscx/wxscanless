@@ -203,11 +203,15 @@ def monitordata_uins(env, name: str) -> list:
 
 
 def monitordata_locked_uin(env, name: str) -> int:
-    """被微信占用（无法独占打开）的 monitordata 文件对应的 uin；无则 0。"""
+    """被微信占用（无法独占打开）的 monitordata 文件对应的 uin；无则 0。
+
+    一个槽位同一时刻只被一个账号占用 → 只有一份被锁，直接用它判定；
+    不靠文件修改时间（多份同时被锁是异常，按"无法确定"处理，避免认错账号）。
+    """
     d = kvcomm_dir(env, name)
     if not os.path.isdir(d):
         return 0
-    locked = []
+    locked_uins = set()
     try:
         names = os.listdir(d)
     except OSError:
@@ -219,14 +223,12 @@ def monitordata_locked_uin(env, name: str) -> int:
         p = os.path.join(d, fn)
         if exclusive_open_ok(p):        # 能独占打开 = 未被占用
             continue
-        try:
-            mt = os.path.getmtime(p)
-        except OSError:
-            mt = 0.0
-        locked.append((int(m.group(1)), mt))
-    if not locked:
+        locked_uins.add(int(m.group(1)))
+    if not locked_uins:
         return 0
-    return max(locked, key=lambda x: x[1])[0]
+    if len(locked_uins) == 1:
+        return next(iter(locked_uins))
+    return 0                          # 异常：多份不同账号同时被锁，宁可判"未确定"也不认错
 
 
 _OWNER_TTL = 2.0
