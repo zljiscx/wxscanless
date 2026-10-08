@@ -1022,13 +1022,16 @@ class App(tk.Tk):
     def _pointer_tick(self) -> None:
         if self._dock != "right":
             return
+        if self._anim_job:                      # 滑动动画中不打断
+            return
         mx, my = self.winfo_pointerxy()
         x, y, w, h, sw, sh = self._geometry_now()
-        # 鼠标靠近屏幕右边缘 ⇒ 滑出显示
+        # 仅当"靠近右边缘"且"落在窗口高度范围内"才滑出（避免移到右边缘上下方也误触发）
         hot = mx >= sw - DOCK_HOT
+        within_y = y <= my <= y + h
         inside = x <= mx <= x + w and y <= my <= y + h
 
-        if hot and not self._docked_shown:
+        if hot and within_y and not self._docked_shown:
             self._docked_shown = True
             self._set_taskbar(True)
             self._slide_to(*self._shown_pos)
