@@ -455,7 +455,6 @@ class App(tk.Tk):
         self.env = env
         if env is not None:
             log_line("微信环境探测：ok=%s" % env.ok)
-            log_line("    主程序   : %s" % (env.exe_path or "<未找到>"))
             if env.errors:
                 log_line("    警告     :")
                 for _e in env.errors:
