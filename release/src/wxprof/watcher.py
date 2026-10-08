@@ -27,6 +27,7 @@ class Watcher:
         self.cfg_gap = 6.0
         self.host_gap = 6.0
         self._last_seen = None              # 上一轮的在线摘要，用于变化通知
+        self._prev_online = None            # 上一轮的在线账号，用于离线诊断
         self.status = self._blank()
 
     @staticmethod
@@ -80,6 +81,12 @@ class Watcher:
             "slots": slot.summary(env),
         }
         self.status = st
+        # 账号从在线跌为离线时记录根因，便于排查"突然离线/登录态与账号不匹配"
+        prev = self._prev_online
+        for wxid, sname in (prev or {}).items():
+            if wxid not in online:
+                self._diag_offline(wxid, sname)
+        self._prev_online = online
         if st["instances"] and online and not self._pausing():
             self._collect(online, live)
         # 在线条目或实例数变了 ⇒ 立刻通知界面，不必等它自己的轮询
@@ -140,6 +147,37 @@ class Watcher:
             self.on_event(res)
         except Exception:                       # noqa: BLE001
             pass
+
+    def _diag_offline(self, wxid: str, sname: str) -> None:
+        """账号从在线跌为离线时，记录可定位根因的信息。"""
+        env, vault = self.env, self.vault
+        if not slot.slot_busy(env, sname):
+            reason = "槽位 %s 已不再被占用（微信可能已退出或被收起）" % sname
+        else:
+            u = slot.current_uin(env, sname)
+            pid = slot.slot_owner_pid(env, sname)
+            if not u:
+                reason = ("槽位 %s 仍被占用(PID=%s)但 monitordata 未锁定"
+                          "（账号锚点瞬时丢失）" % (sname, pid or "?"))
+            elif pid == 0:
+                reason = "槽位 %s 当前账号 uin=%s，但反查不到微信进程 PID" % (sname, u)
+            else:
+                try:
+                    from . import ui
+                    uia_ok = getattr(ui, "_OK", True)
+                    win = ui.login_window_of(pid)
+                    if win is not None:
+                        reason = ("槽位 %s 账号 uin=%s、PID=%s，但检测到登录/扫码窗口"
+                                  "（未在主界面，判离线）" % (sname, u, pid))
+                    elif not uia_ok:
+                        reason = ("槽位 %s 账号 uin=%s、PID=%s，UIA 不可用致窗口检测不可靠"
+                                  % (sname, u, pid))
+                    else:
+                        reason = ("槽位 %s 账号 uin=%s、PID=%s，主界面窗口已消失"
+                                  "（可能最小化到托盘或进程异常）" % (sname, u, pid))
+                except Exception as e:           # noqa: BLE001
+                    reason = "槽位 %s 检测主界面窗口异常：%r" % (sname, e)
+        self.on_log("账号 %s 从在线跌为离线 —— %s" % (wxid, reason))
 
     def snapshot(self) -> dict:
         return dict(self.status)

@@ -781,6 +781,11 @@ class App(tk.Tk):
         self.after(0, self.refresh)
 
     def _on_watch_log(self, text: str) -> None:
+        """监控线程的日志：同时落盘（之前只显示到状态栏，导致报错查不到）。"""
+        try:
+            log_line("[监控] %s" % str(text).strip())
+        except Exception:                       # noqa: BLE001
+            pass
         self.after(0, lambda: self.var_status.set(text))
 
     def _on_status_change(self, st: dict) -> None:
