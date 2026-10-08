@@ -455,8 +455,11 @@ class App(tk.Tk):
         self.env = env
         if env is not None:
             log_line("微信环境探测：ok=%s" % env.ok)
-            for _line in env.summary().splitlines():
-                log_line("    " + _line)
+            log_line("    主程序   : %s" % (env.exe_path or "<未找到>"))
+            if env.errors:
+                log_line("    警告     :")
+                for _e in env.errors:
+                    log_line("        " + _e)
             try:
                 self.watcher = watcher.Watcher(
                     env, self.vault, interval=0.6, on_event=self._on_capture,
