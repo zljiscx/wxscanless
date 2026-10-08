@@ -170,8 +170,7 @@ def login_account(env, vault, acc, log=print) -> dict:
     target, forced = slot.pick_slot(env, src_host)
     if not target:
         res.update(stage="full",
-                   detail="微信最多 %d 个实例，当前已满，请先退出一个"
-                          % slot.MAX_INSTANCES)
+                   detail="没有可用的空闲槽位（微信实例可能已开满），请先退出一个")
         return res
     res["slot"] = target
     if forced:

@@ -34,7 +34,7 @@ class WeChatEnv:
             "安装目录 : %s" % (self.install_dir or "<未找到>"),
             "主程序   : %s" % (self.exe_path or "<未找到>"),
             "版本     : %s" % (self.version or "<未知>"),
-            "运行区   : %s" % (self.appdata_dir or "<未找到>"),
+            "运行目录 : %s" % (self.appdata_dir or "<未找到>"),
             "数据根   : %s" % (self.data_root or "<未找到>"),
             "文件目录 : %s" % (self.files_dir or "<未找到>"),
             "全局配置 : %s" % (self.config_dir or "<未找到>"),

@@ -146,6 +146,7 @@ LINE = "#e6e6e6"
 GRAY = "#c9c9c9"
 GRAY_OFFLINE = "#bdbdbd"                # 离线头像的占位灰
 RED = "#e64340"
+LINK = "#1677ff"            # 状态栏可双击打开目录的链接色
 THUMB = "#c4c4c4"                       # 细滚动条的滑块
 THUMB_ACTIVE = "#9e9e9e"                # 按下/拖动时的滑块
 
@@ -164,6 +165,11 @@ DOCK_EDGE = 18          # 窗口距屏幕**右**边缘多少像素内 → 自动
 DOCK_HOT = 8            # 鼠标离屏幕右边缘多少像素内算"靠近"
 DOCK_POLL = 120         # 鼠标位置轮询间隔（ms）
 DOCK_SLIDE_MS = 12      # 滑动动画帧间隔（ms）
+
+# 日志窗口尺寸与主窗口的跟随间隙
+LOG_W = 900             # 日志窗口宽度（约为原宽的两倍，便于阅读复制）
+LOG_H = 600             # 兜底高度（实际取主窗口高度）
+LOG_GAP = 8             # 日志窗口贴着主窗口左边时的间隙
 
 PALETTE = ("#5b8ff9", "#5ad8a6", "#f6bd16", "#e8684a", "#6dc8ec",
            "#9270ca", "#ff9d4d", "#269a99", "#ff99c3", "#7f8fa6")
@@ -376,6 +382,12 @@ class App(tk.Tk):
         self._dragging = False                  # 正在拖动（拖时不判贴边）
         self._drag_off = None                   # 按下点相对窗口左上角的偏移
 
+        self._log_win = None                    # 独立日志窗口（Toplevel）
+        self._log_text = None
+        self._log_open = False                  # 日志窗口是否打开
+        self._log_offset = 0                    # 已读日志的字节偏移（增量读取）
+        self._log_timer = None                  # 实时刷新定时器
+
         self.title("微信多账号免扫码登录器 v%s" % __version__)
         self._set_icon()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -485,10 +497,25 @@ class App(tk.Tk):
         tk.Label(head, text="v%s" % __version__, bg=BG, fg=SUB,
                  font=("Microsoft YaHei UI", 9)).pack(side="left", padx=5,
                                                        pady=(3, 0))
-        self.var_env = tk.StringVar(value="正在加载运行环境…")
-        tk.Label(self, textvariable=self.var_env, bg=BG, fg=SUB, anchor="w",
-                 justify="left", wraplength=WIN_W - 40,
-                 font=("Microsoft YaHei UI", 9)).pack(fill="x", padx=16)
+        # 版本与目录标签：微信 X.X.X · 运行目录 · 聊天记录（后两者双击打开对应目录）
+        self._env_frame = tk.Frame(self, bg=BG)
+        self._env_frame.pack(fill="x", padx=16)
+        self._env_ver = tk.Label(self._env_frame, text="正在加载运行环境…",
+                                 bg=BG, fg=LINK, anchor="w",
+                                 font=("Microsoft YaHei UI", 9), cursor="hand2")
+        self._env_ver.pack(side="left")
+        self._env_ver.bind("<Double-Button-1>", self._launch_wechat)
+        self._env_dir = tk.Label(self._env_frame, text="运行目录", bg=BG,
+                                 fg=LINK, anchor="w",
+                                 font=("Microsoft YaHei UI", 9), cursor="hand2")
+        self._env_dir.bind("<Double-Button-1>", self._open_env_dir)
+        self._env_sep = tk.Label(self._env_frame, text=" · ", bg=BG, fg=SUB,
+                                 anchor="w", font=("Microsoft YaHei UI", 9))
+        self._env_files = tk.Label(self._env_frame, text="聊天记录", bg=BG,
+                                   fg=LINK, anchor="w",
+                                   font=("Microsoft YaHei UI", 9), cursor="hand2")
+        self._env_files.bind("<Double-Button-1>", self._open_files_dir)
+        self._env_dirs_built = False
 
     def _build_body(self) -> None:
         wrap = tk.Frame(self, bg=BG)
@@ -540,10 +567,13 @@ class App(tk.Tk):
         self.btn_all.pack(side="left", fill="x", expand=True)
         self.btn_all._primary, self.btn_all._danger = True, False
         self._set_btn(self.btn_all, True)
-        tk.Button(box, text="刷新", command=self.refresh, relief="flat", padx=14,
-                  pady=7, bg="#ffffff", fg=TEXT, activebackground="#f0f0f0",
-                  font=("Microsoft YaHei UI", 10), highlightbackground="#dcdcdc",
-                  highlightthickness=1).pack(side="left", padx=(6, 0))
+        self.btn_log = tk.Button(box, text="查看日志", command=self.toggle_log,
+                                 relief="flat", padx=14, pady=7, bg="#ffffff",
+                                 fg=TEXT, activebackground="#f0f0f0",
+                                 font=("Microsoft YaHei UI", 10),
+                                 highlightbackground="#dcdcdc",
+                                 highlightthickness=1)
+        self.btn_log.pack(side="left", padx=(6, 0))
 
     def _btn(self, parent, text, cmd, primary=False, danger=False):
         """卡片上的小按钮（竖排在卡片右侧）。"""
@@ -771,18 +801,21 @@ class App(tk.Tk):
         if self.env is None:
             return
         online = self._status_online()
-        n = int(self.watcher.status.get("instances", 0)) if self.watcher else 0
-        accs = self.vault.list_accounts()          # 每轮只读一次档案目录
-        titles = {a.wxid: (a.nickname or a.wxid) for a in accs}
-        names = [titles.get(w, short(w, 8)) for w in online]
+        accs = self.vault.list_accounts()          # 供「一键登录全部」可用判定
         if self.env.ok:
-            self.var_env.set("微信 %s · %d 个实例 · %s"
-                             % (self.env.version or "?", n,
-                                ("在线：" + "、".join(names)) if names
-                                else "暂无账号在线"))
+            self._env_ver.config(text="微信 %s ·" % (self.env.version or "?"))
+            if not self._env_dirs_built:
+                self._env_dir.pack(side="left")
+                self._env_sep.pack(side="left")
+                self._env_files.pack(side="left")
+                self._env_dirs_built = True
         else:
-            # 环境没探测全时只显示"未发现微信环境"
-            self.var_env.set("未发现微信环境")
+            self._env_ver.config(text="未发现微信环境")
+            if self._env_dirs_built:
+                self._env_dir.pack_forget()
+                self._env_sep.pack_forget()
+                self._env_files.pack_forget()
+                self._env_dirs_built = False
 
         for _w, w in self.rows.items():
             acc = w["acc"]
@@ -816,6 +849,39 @@ class App(tk.Tk):
                             bg=ACCENT if (can_all and not locked) else GRAY,
                             highlightbackground=(ACCENT if (can_all and not locked)
                                                  else GRAY))
+
+    def _open_env_dir(self, event=None) -> None:
+        """双击「运行目录」打开微信运行目录（xwechat）。"""
+        if not (self.env and self.env.appdata_dir):
+            return
+        if os.path.isdir(self.env.appdata_dir):
+            try:
+                os.startfile(self.env.appdata_dir)
+            except Exception as e:               # noqa: BLE001
+                log_line("打开运行目录失败：%r" % (e,))
+        else:
+            log_line("运行目录不存在：%s" % self.env.appdata_dir)
+
+    def _open_files_dir(self, event=None) -> None:
+        """双击「聊天记录」打开微信聊天记录目录（xwechat_files）。"""
+        if not (self.env and self.env.files_dir):
+            return
+        if os.path.isdir(self.env.files_dir):
+            try:
+                os.startfile(self.env.files_dir)
+            except Exception as e:               # noqa: BLE001
+                log_line("打开聊天记录目录失败：%r" % (e,))
+        else:
+            log_line("聊天记录目录不存在：%s" % self.env.files_dir)
+
+    def _launch_wechat(self, event=None) -> None:
+        """双击版本标签启动一个微信实例。"""
+        if not (self.env and self.env.exe_path):
+            return
+        try:
+            process.launch(self.env.exe_path)
+        except Exception as e:               # noqa: BLE001
+            log_line("启动微信失败：%r" % (e,))
 
     def _bind_drag(self) -> None:
         """让窗口内任意位置都能按住拖动（按钮与滚动条除外）。"""
@@ -867,6 +933,7 @@ class App(tk.Tk):
             except Exception:                   # noqa: BLE001
                 pass
         self._cfg_job = self.after(420, self._maybe_dock)
+        self._sync_log_pos()                       # 主窗口移动时日志窗口同步跟随
 
     def _geometry_now(self):
         return (self.winfo_x(), self.winfo_y(),
@@ -891,13 +958,23 @@ class App(tk.Tk):
             self._set_taskbar(True)
 
     def _enter_dock(self, y: int, w: int, sw: int) -> None:
-        """进入右侧贴边态：完全滑出屏幕，并把窗口从任务栏摘掉。"""
+        """进入右侧贴边态：鼠标仍停在窗口上则先保持显示，离开再隐藏。"""
         self._dock = "right"
         self._shown_pos = (sw - w, y)
         self._hidden_pos = (sw + 2, y)          # 整个窗口挪到屏幕右外侧
-        self._docked_shown = False
-        self._set_taskbar(False)
-        self._slide_to(*self._hidden_pos)
+        mx, my = self.winfo_pointerxy()
+        wx, wy = self.winfo_x(), self.winfo_y()
+        h = self.winfo_height()
+        inside = wx <= mx <= wx + w and wy <= my <= wy + h
+        if inside:
+            self._docked_shown = True
+            self._set_taskbar(True)
+        else:
+            self._docked_shown = False
+            self._set_taskbar(False)
+            self._slide_to(*self._hidden_pos)
+            if self._log_open:                  # 贴边隐藏时一并关闭日志窗口
+                self._close_log()
 
     def _slide_to(self, tx: int, ty: int) -> None:
         if self._anim_job:
@@ -954,6 +1031,8 @@ class App(tk.Tk):
             self._docked_shown = False
             self._slide_to(*self._hidden_pos)
             self._set_taskbar(False)
+            if self._log_open:                  # 贴边隐藏时一并关闭日志窗口
+                self._close_log()
 
     def _poll_show_event(self) -> None:
         """轮询"请显示窗口"信号（第二个实例被单实例闸门拦下时发的）。"""
@@ -1045,11 +1124,6 @@ class App(tk.Tk):
         if acc.wxid in self._status_online():
             messagebox.showinfo("已在线", "「%s」已经在线了。" % acc.title)
             return
-        if process.count_instances() >= slot.MAX_INSTANCES:
-            messagebox.showwarning("实例已满",
-                                   "微信同时最多 %d 个实例，请先退出一个。"
-                                   % slot.MAX_INSTANCES)
-            return
         if not self.vault.ready(acc.wxid):
             messagebox.showwarning(
                 "登录态不完整",
@@ -1081,13 +1155,6 @@ class App(tk.Tk):
                  % (len(online), skipped)) if skipped
                 else "所有账号都已经在线了。")
             return
-        room = slot.MAX_INSTANCES - process.count_instances()
-        if room <= 0:
-            messagebox.showwarning("实例已满", "微信同时最多 %d 个实例。"
-                                   % slot.MAX_INSTANCES)
-            return
-        if len(todo) > room:
-            todo = todo[:room]
 
         def work():
             done, failed = [], []
@@ -1131,15 +1198,221 @@ class App(tk.Tk):
         self.refresh()
 
     def on_close(self) -> None:
-        for j in (self._cfg_job, self._anim_job):
+        for j in (self._cfg_job, self._anim_job, self._log_timer):
             if j:
                 try:
                     self.after_cancel(j)
                 except Exception:               # noqa: BLE001
                     pass
+        if self._log_win and self._log_win.winfo_exists():
+            try:
+                self._log_win.destroy()
+            except Exception:               # noqa: BLE001
+                pass
         if self.watcher:
             self.watcher.stop()
         self.destroy()
+
+    def toggle_log(self) -> None:
+        """查看日志 / 关闭日志 自切换。"""
+        if self._log_open:
+            self._close_log()
+        else:
+            self._open_log()
+
+    def _build_log_win(self) -> None:
+        """创建独立的日志窗口（浅色、两列对齐、可选中复制、无最小化按钮）。"""
+        w = tk.Toplevel(self)
+        w.title("运行日志")
+        w.transient(self)                  # 从属主窗口，不单独占用任务栏
+        w.protocol("WM_DELETE_WINDOW", self._close_log)
+        txt = tk.Text(w, wrap="word", bg="#ffffff", fg=TEXT,
+                      font=("Microsoft YaHei UI", 10), padx=10, pady=8,
+                      state="normal", cursor="arrow", relief="flat", bd=0,
+                      highlightthickness=0, insertwidth=0,
+                      selectbackground="#cfe4ff", selectforeground=TEXT,
+                      spacing1=2, spacing3=2)
+        sb = ThinScrollbar(w, command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+        # 时间列宽度：按实际时间戳像素宽度 + 余量，作制表位与续行缩进
+        import tkinter.font as tkfont
+        time_w = tkfont.Font(family="Microsoft YaHei UI", size=10).measure(
+            "[2026-10-08 20:41:55.123] ") + 8
+        txt.configure(tabs=(time_w,))
+        txt.tag_configure("body", lmargin2=time_w)   # 续行缩进到内容列
+        txt.tag_configure("ts", foreground="#8a8a8a")  # 时间戳灰色区分两列
+        # 只允许选中/复制，禁止用户直接编辑
+        txt.bind("<Key>", self._log_block_edit)
+        txt.bind("<Control-v>", lambda e: "break")
+        txt.bind("<Control-x>", lambda e: "break")
+        txt.bind("<<Paste>>", lambda e: "break")
+        txt.bind("<<Cut>>", lambda e: "break")
+        txt.bind("<Button-3>", self._log_context_menu)
+        # 滚轮只滚日志自身，并阻断冒泡到主窗口（账号列表用的是 bind_all）
+        txt.bind("<MouseWheel>", self._log_on_wheel)
+        sb.bind("<MouseWheel>", self._log_on_wheel)
+        w.resizable(False, False)
+        w.geometry("%dx%d+%d+%d"
+                   % (LOG_W, self.winfo_height() or LOG_H, -9999, 0))
+        self._remove_log_minbox(w)
+        self._log_win = w
+        self._log_text = txt
+
+    def _log_on_wheel(self, event) -> None:
+        """日志窗口滚轮：只滚日志，并返回 break 阻断冒泡到主窗口。"""
+        self._log_text.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        return "break"
+
+    def _insert_log_lines(self, text: str) -> None:
+        """按行插入为两列（时间列 / 内容列）；续行缩进到内容列。"""
+        for ln in text.split("\n"):
+            if not ln:
+                continue
+            idx = ln.find("]")
+            if idx != -1:
+                ts = ln[:idx + 1]
+                body = ln[idx + 1:]
+                if body.startswith(" "):
+                    body = body[1:]
+                self._log_text.insert("end", ts, "ts")
+                self._log_text.insert("end", "\t" + body + "\n", "body")
+            else:
+                self._log_text.insert("end", "\t" + ln + "\n", "body")
+        self._log_text.see("end")
+
+    def _log_block_edit(self, event) -> None:
+        """拦截用户直接键入，但放行 Ctrl+C / Ctrl+A 等复制、全选组合键。"""
+        if event.state & (0x04 | 0x08):          # Control / Alt
+            if event.keysym in ("v", "V", "x", "X"):
+                return "break"
+            return
+        return "break"
+
+    def _log_context_menu(self, event) -> None:
+        """右键菜单：复制 / 全选。"""
+        try:
+            menu = tk.Menu(self._log_win, tearoff=0)
+            menu.add_command(label="复制",
+                             command=lambda: self._log_text.event_generate("<<Copy>>"))
+            menu.add_command(label="全选",
+                             command=lambda: self._log_text.tag_add("sel", "1.0", "end"))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:                       # noqa: BLE001
+            pass
+
+    def _remove_log_minbox(self, win) -> None:
+        """去掉日志窗口的最小化（及最大化）按钮，避免被最小化到任务栏。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            u = _init_user32()
+            win.update_idletasks()
+            root = u.GetAncestor(wintypes.HWND(win.winfo_id()), 2)  # GA_ROOT
+            h = wintypes.HWND(int(root or win.winfo_id()))
+            style = u.GetWindowLongPtrW(h, -16)   # GWL_STYLE
+            style &= ~0x00020000                 # WS_MINIMIZEBOX
+            style &= ~0x00010000                 # WS_MAXIMIZEBOX
+            u.SetWindowLongPtrW(h, -16, ctypes.c_ssize_t(style))
+            u.SetWindowPos(h, None, 0, 0, 0, 0,
+                           _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER
+                           | _SWP_FRAMECHANGED | _SWP_NOACTIVATE)
+        except Exception as e:                   # noqa: BLE001
+            log_line("去掉日志窗口最小化按钮失败：%r" % (e,))
+
+    def _open_log(self) -> None:
+        self._log_open = True
+        try:
+            self.btn_log.config(text="关闭日志")
+        except Exception:               # noqa: BLE001
+            pass
+        if self._log_win is None or not self._log_win.winfo_exists():
+            self._build_log_win()
+        self._log_win.deiconify()
+        self._log_win.lift()
+        self._sync_log_pos()
+        self._log_offset = 0
+        self._log_text.delete("1.0", "end")
+        self._log_tick()
+
+    def _close_log(self) -> None:
+        self._log_open = False
+        try:
+            self.btn_log.config(text="查看日志")
+        except Exception:               # noqa: BLE001
+            pass
+        if self._log_timer:
+            try:
+                self.after_cancel(self._log_timer)
+            except Exception:               # noqa: BLE001
+                pass
+            self._log_timer = None
+        if self._log_win and self._log_win.winfo_exists():
+            self._log_win.withdraw()
+
+    def _sync_log_pos(self) -> None:
+        """把日志窗口贴到主窗口左边、与主窗口等高；主窗口移动时同步跟随。"""
+        if not self._log_open or self._log_win is None \
+                or not self._log_win.winfo_exists():
+            return
+        try:
+            mx, my = self.winfo_x(), self.winfo_y()
+            mw = self.winfo_width()
+            mh = self.winfo_height()
+        except Exception:               # noqa: BLE001
+            return
+        lw = LOG_W
+        x = mx - lw - LOG_GAP
+        if x < 0:                              # 主窗口太靠左则改贴右侧
+            x = mx + mw + LOG_GAP
+            if x + lw > self.winfo_screenwidth():
+                x = 0
+        self._log_win.geometry("%dx%d+%d+%d" % (lw, mh, x, my))
+
+    def _log_tick(self) -> None:
+        """每 0.5s 增量读取日志文件，追加到窗口（不重读全文）。"""
+        if not self._log_open or self._log_win is None \
+                or not self._log_win.winfo_exists():
+            return
+        try:
+            size = os.path.getsize(LOG_PATH)
+            if size < self._log_offset:        # 文件被重建/截断 → 从头读
+                self._log_offset = 0
+                self._log_text.delete("1.0", "end")
+            if size > self._log_offset:
+                with open(LOG_PATH, "rb") as f:
+                    f.seek(self._log_offset)
+                    data = f.read()
+                last_nl = data.rfind(b"\n")
+                if last_nl == -1:
+                    chunk = b""                  # 半行，等下次积累完整再处理
+                else:
+                    chunk = data[:last_nl + 1]
+                self._log_offset += len(chunk)
+                if chunk:
+                    text = chunk.decode("utf-8", errors="replace")
+                    self._insert_log_lines(text)
+                    lines = int(self._log_text.index("end").split(".")[0])
+                    if lines > 5000:           # 限制行数，避免无限增长
+                        self._log_text.delete("1.0", "%d.0" % (lines - 4000))
+        except OSError:
+            pass
+        self._log_timer = self.after(500, self._log_tick)
+
+    def iconify(self) -> None:
+        try:
+            super().iconify()
+        finally:
+            # 主窗口最小化 → 直接关闭日志（不再最小化到任务栏）
+            if getattr(self, "_log_open", False):
+                self._close_log()
+
+    def deiconify(self) -> None:
+        try:
+            super().deiconify()
+        finally:
+            pass
 
 
 def _warn_no_uia(parent=None) -> None:

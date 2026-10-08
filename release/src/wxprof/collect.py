@@ -8,8 +8,6 @@ import time
 from . import avatar, file_md5, mmkv, slot
 from .vault import Account, Vault
 
-INSTANCE_ORDER = slot.INSTANCE_DIRS
-
 
 def live_config_path(env) -> str:
     return os.path.join(env.config_dir, "global_config") if env.config_dir else ""
@@ -35,7 +33,7 @@ def locate_slot(env, vault, uin: int) -> str:
     want = file_md5(os.path.join(vault.host_dir(acc.wxid), "host-redirect.xml"))
     if not want:
         return ""
-    for name in slot.INSTANCE_DIRS:
+    for name in slot.instance_names(env):
         if not slot.slot_busy(env, name):
             continue
         p = os.path.join(slot.slot_dir(env, name), "host", "host-redirect.xml")
@@ -77,7 +75,7 @@ def online_accounts(env, vault, live: dict = None,
     if live is None:
         live = live_summary(env)
     out = {}
-    for name in slot.INSTANCE_DIRS:
+    for name in slot.instance_names(env):
         if not slot.slot_busy(env, name):
             continue
         u = slot.current_uin(env, name)
@@ -127,7 +125,7 @@ def resolve_live_account(env, vault, live: dict = None):
     if wxid:
         return wxid, int(live.get("uin_dec") or 0), "live config"
     # 回退：任一槽位的当前 uin 若能对应到档案账号，就认为是它
-    for name in INSTANCE_ORDER:
+    for name in slot.instance_names(env):
         if not slot.slot_busy(env, name):
             continue
         u = slot.current_uin(env, name)

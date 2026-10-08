@@ -10,11 +10,24 @@ import shutil
 import time
 from ctypes import wintypes
 
-from . import file_md5 as file_md5_of
+# 微信的实例槽位，按下标即"第几个实例"；数量不固定，运行时动态枚举
+_SLOT_RE = re.compile(r"^net(?:_(\d+))?$")
 
-# 微信的实例槽位，按下标即"第几个实例"；上限 4
-INSTANCE_DIRS = ("net", "net_1", "net_2", "net_3")
-MAX_INSTANCES = len(INSTANCE_DIRS)
+
+def instance_names(env) -> list:
+    """枚举微信实例槽位名（net / net_1 / ...），支持任意数量。"""
+    root = slot_root(env)
+    max_idx = 0
+    if os.path.isdir(root):
+        for fn in os.listdir(root):
+            m = _SLOT_RE.match(fn)
+            if m and m.group(1):
+                max_idx = max(max_idx, int(m.group(1)))
+    # 覆盖到"已存在最大下标 + 3"，保证微信能继续开新实例
+    names = ["net"]
+    for i in range(1, max_idx + 4):
+        names.append("net_%d" % i)
+    return names
 
 # 本工具在 host 目录里留下的临时后缀，采集时跳过
 TEMP_SUFFIX = (".livebak", ".parked", ".hotbak", ".probe_bak", ".tmp")
@@ -140,13 +153,13 @@ def slot_busy(env, name: str) -> bool:
 
 
 def busy_slots(env) -> list:
-    """当前被占用的槽位名（顺序同 INSTANCE_DIRS）。"""
-    return [n for n in INSTANCE_DIRS if slot_busy(env, n)]
+    """当前被占用的槽位名（按枚举顺序）。"""
+    return [n for n in instance_names(env) if slot_busy(env, n)]
 
 
 def free_slots(env) -> list:
     """当前空闲的槽位名。"""
-    return [n for n in INSTANCE_DIRS if not slot_busy(env, n)]
+    return [n for n in instance_names(env) if not slot_busy(env, n)]
 
 
 def free_slot(env, want_host: str = "") -> str:
@@ -156,7 +169,7 @@ def free_slot(env, want_host: str = "") -> str:
     "挑一个同源的" —— 铺进非最小空闲槽位的 host，微信根本不会去读那个槽位，
     结果就是 host 白铺、登录页切二维码（实测小号被铺到 net_2 后跳扫码）。
     """
-    for name in INSTANCE_DIRS:
+    for name in instance_names(env):
         if not slot_busy(env, name):
             return name
     return ""
@@ -221,15 +234,20 @@ _OWNER_CACHE = {}
 
 
 def slot_owner_pid(env, name: str) -> int:
-    """被微信占用的 monitordata 文件由哪个 PID 持有；无法确定返回 0。"""
+    """该槽位的微信进程 PID（monitordata 锁优先，退化时由 config.ini 锁反查）；无法确定返回 0。"""
     d = kvcomm_dir(env, name)
-    if not os.path.isdir(d):
-        return 0
-    try:
-        names = os.listdir(d)
-    except OSError:
-        return 0
+    names = []
+    if os.path.isdir(d):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            names = []
     now = time.time()
+    cached = _OWNER_CACHE.get(name)
+    if cached and cached[1] > now:
+        return cached[0]
+    owner = 0
+    # 主路：被锁的 monitordata 文件（账号级，登录后才出现）
     for fn in names:
         m = _MON.match(fn)
         if not m or m.group(1) == "0":
@@ -237,15 +255,21 @@ def slot_owner_pid(env, name: str) -> int:
         p = os.path.join(d, fn)
         if exclusive_open_ok(p):
             continue
-        cached = _OWNER_CACHE.get(name)
-        if cached and cached[1] > now:
-            return cached[0]
         pids = file_owner_pids(p)
-        pid = pids[0] if pids else 0
-        _OWNER_CACHE[name] = (pid, now + _OWNER_TTL)
-        return pid
-    _OWNER_CACHE.pop(name, None)
-    return 0
+        owner = pids[0] if pids else 0
+        if owner:
+            break
+    # 退化路：槽位一直被占用的 config.ini（停在登录页、未登账号也能反查）
+    if not owner and slot_busy(env, name):
+        lf = lock_file(env, name)
+        if os.path.isfile(lf):
+            pids = file_owner_pids(lf)
+            owner = pids[0] if pids else 0
+    if owner:
+        _OWNER_CACHE[name] = (owner, now + _OWNER_TTL)
+    else:
+        _OWNER_CACHE.pop(name, None)
+    return owner
 
 
 def current_uin(env, name: str) -> int:
@@ -259,10 +283,10 @@ def slot_of_uin(env, uin: int) -> str:
     """哪个槽位当前住着这个 uin；不确定时返回空串。"""
     if not uin:
         return ""
-    for name in INSTANCE_DIRS:
+    for name in instance_names(env):
         if current_uin(env, name) == uin:
             return name
-    hits = [n for n in INSTANCE_DIRS if uin in monitordata_uins(env, n)]
+    hits = [n for n in instance_names(env) if uin in monitordata_uins(env, n)]
     if len(hits) == 1:
         return hits[0]
     return ""
@@ -271,7 +295,7 @@ def slot_of_uin(env, uin: int) -> str:
 def online_uins(env) -> dict:
     """当前已登录的账号：{uin: 槽位}。"""
     out = {}
-    for name in INSTANCE_DIRS:
+    for name in instance_names(env):
         if not slot_busy(env, name):
             continue
         u = current_uin(env, name)
@@ -393,7 +417,7 @@ def slot_logged_in(env, name: str) -> bool:
             return ui.login_window_of(pid) is None
         except Exception:                       # noqa: BLE001
             return False
-    order = [n for n in INSTANCE_DIRS if slot_busy(env, n)]
+    order = [n for n in instance_names(env) if slot_busy(env, n)]
     for i, nm in enumerate(order):
         if nm != name or i >= len(pids):
             continue
@@ -407,7 +431,7 @@ def slot_logged_in(env, name: str) -> bool:
 def summary(env) -> dict:
     """给界面/日志用的一份槽位概览。"""
     out = {}
-    for name in INSTANCE_DIRS:
+    for name in instance_names(env):
         out[name] = {
             "exists": os.path.isdir(slot_dir(env, name)),
             "busy": slot_busy(env, name),
