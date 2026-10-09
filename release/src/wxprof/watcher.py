@@ -81,10 +81,15 @@ class Watcher:
             "slots": slot.summary(env),
         }
         self.status = st
-        # 账号从在线跌为离线时记录根因，便于排查"突然离线/登录态与账号不匹配"
+        # 判离线前去抖：进程仍在的账号维持在线，不算离线
         prev = self._prev_online
-        for wxid, sname in (prev or {}).items():
-            if wxid not in online:
+        if prev:
+            for wxid, sname in list(prev.items()):
+                if wxid in online:
+                    continue
+                if slot.slot_owner_pid(env, sname):
+                    online[wxid] = sname
+                    continue
                 self._diag_offline(wxid, sname)
         self._prev_online = online
         if st["instances"] and online and not self._pausing():

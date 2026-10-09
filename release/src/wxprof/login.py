@@ -191,14 +191,6 @@ def login_account(env, vault, acc, log=print) -> dict:
                    detail="档案里的 config 属于 %s，与账号不符，拒绝使用" % owner)
         return res
 
-    # 2b) 已有实例停在登录界面（占着槽位但没账号）→ 先说清楚，否则必跳扫码页
-    idle = [n for n in slot.busy_slots(env)
-            if not slot.slot_logged_in(env, n)]
-    if idle:
-        log("  ⚠ 检测到 %d 个停在登录界面的微信实例（占着 %s）。"
-            "它们没有账号登录态，会占住槽位。"
-            % (len(idle), "、".join(idle)))
-
     # 3) 热替换 config 对
     n = install_config_pair(env, vault.cfg_dir(acc.wxid), log=log)
     if n != len(CONFIG_FILES):
