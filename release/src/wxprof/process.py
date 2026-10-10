@@ -215,6 +215,17 @@ def pids() -> set:
     return _all_pids()
 
 
+def is_alive(pid: int) -> bool:
+    """进程是否仍存在（OpenProcess 成功即认为存活）。"""
+    if not pid:
+        return False
+    h = _kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    _kernel32.CloseHandle(h)
+    return True
+
+
 def _ensure_xweb_dll_path() -> str:
     """把 XWeb 运行时目录补进 PATH，供微信进程树解析 xweb_elf.dll。"""
     from . import paths

@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
-from . import collect, slot
+from . import collect, slot, process
 
 
 class Watcher:
@@ -27,7 +27,8 @@ class Watcher:
         self.cfg_gap = 6.0
         self.host_gap = 6.0
         self._last_seen = None              # 上一轮的在线摘要，用于变化通知
-        self._prev_online = None            # 上一轮的在线账号，用于离线诊断
+        self._prev_online = None
+        self._slot_pid = {}                    # 槽位名 -> 已知微信进程 PID（稳定在线时记录）            # 上一轮的在线账号，用于离线诊断
         self.status = self._blank()
 
     @staticmethod
@@ -67,7 +68,6 @@ class Watcher:
             self._stop.wait(self.interval)
 
     def poll_once(self) -> dict:
-        from . import process
         env = self.env
         live = collect.live_summary(env)
         busy = slot.busy_slots(env)
@@ -81,16 +81,12 @@ class Watcher:
             "slots": slot.summary(env),
         }
         self.status = st
-        # 判离线前去抖：进程仍在的账号维持在线，不算离线
-        prev = self._prev_online
-        if prev:
-            for wxid, sname in list(prev.items()):
-                if wxid in online:
-                    continue
-                if slot.slot_owner_pid(env, sname):
-                    online[wxid] = sname
-                    continue
-                self._diag_offline(wxid, sname)
+        # 记录稳定在线槽位的 PID（此时双锁满足，monitordata 锁在，反查最稳）
+        for _s in list(online.values()):
+            _pid = slot.slot_owner_pid(env, _s)
+            if _pid:
+                self._slot_pid[_s] = _pid
+        self._debounce_offline(online, env)
         self._prev_online = online
         if st["instances"] and online and not self._pausing():
             self._collect(online, live)
@@ -104,6 +100,27 @@ class Watcher:
                 except Exception:               # noqa: BLE001
                     pass
         return st
+
+    def _debounce_offline(self, online: dict, env) -> None:
+        """判离线前去抖：进程仍在的账号维持在线，不算离线。
+
+        current_uin 依赖文件锁瞬态，微信重建 config.ini 等文件那一瞬会返回 0，
+        使账号从 online 里消失；此处改看微信进程是否真退出兜底，避免误报离线。
+        """
+        prev = self._prev_online
+        if not prev:
+            return
+        for wxid, sname in list(prev.items()):
+            if wxid in online:
+                continue
+            # 文件锁瞬时释放会让 slot_owner_pid 返回 0，改看进程是否真退出
+            alive = bool(slot.slot_owner_pid(env, sname)) or \
+                    bool(self._slot_pid.get(sname)
+                         and process.is_alive(self._slot_pid[sname]))
+            if alive:
+                online[wxid] = sname
+                continue
+            self._diag_offline(wxid, sname)
 
     def _collect(self, online: dict, live: dict) -> None:
         now = time.time()
