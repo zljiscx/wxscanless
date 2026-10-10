@@ -266,10 +266,38 @@ def slot_owner_pid(env, name: str) -> int:
 
 
 def current_uin(env, name: str) -> int:
-    """该槽位当前登录账号的 uin；未登录/停在登录页/已登出返回 0。"""
+    """该槽位当前登录账号的 uin；未登录/停在登录页/已登出返回 0。
+
+    光有 monitordata 锁可能是已退出账号的残留文件，须同时有对应
+    key_<uin>_..._input.statistic 被占用才认作真正在线。
+    """
     if not slot_busy(env, name):
         return 0
-    return monitordata_locked_uin(env, name)   # 锁定的那份 = 当前在线账号；无锁 = 无在线账号
+    d = kvcomm_dir(env, name)
+    if not os.path.isdir(d):
+        return 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    locked = set()
+    for fn in names:
+        m = _MON.match(fn)
+        if not m or m.group(1) == "0":
+            continue
+        if not exclusive_open_ok(os.path.join(d, fn)):
+            locked.add(int(m.group(1)))
+    if not locked:
+        return 0
+    for fn in names:
+        if fn.startswith("key_") and fn.endswith("_input.statistic"):
+            try:
+                u = int(fn.split("_")[1])
+            except (ValueError, IndexError):
+                continue
+            if u in locked and not exclusive_open_ok(os.path.join(d, fn)):
+                return u
+    return 0
 
 
 def slot_of_uin(env, uin: int) -> str:
