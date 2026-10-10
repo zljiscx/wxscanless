@@ -45,6 +45,8 @@ _user32.IsWindow.restype = wintypes.BOOL
 _user32.IsWindow.argtypes = [wintypes.HWND]
 _user32.IsWindowVisible.restype = wintypes.BOOL
 _user32.IsWindowVisible.argtypes = [wintypes.HWND]
+_user32.IsIconic.restype = wintypes.BOOL
+_user32.IsIconic.argtypes = [wintypes.HWND]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 
@@ -771,6 +773,17 @@ def main_window_of(pid: int):
     """取某个进程的主界面窗口（多开时用来定位具体是哪个实例）。"""
     ws = _windows_of_class(MAIN_CLASS, pid)
     return ws[0] if ws else None
+
+
+def window_visual_state(win) -> str:
+    """主界面窗口是正常显示还是已最小化。"""
+    hwnd = _native_handle(win)
+    if not hwnd:
+        return "main"
+    try:
+        return "main_min" if _user32.IsIconic(wintypes.HWND(hwnd)) else "main"
+    except Exception:                           # noqa: BLE001
+        return "main"
 
 
 def wait_login_window_gone(timeout=60) -> bool:

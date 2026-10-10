@@ -265,11 +265,30 @@ def slot_owner_pid(env, name: str) -> int:
     return owner
 
 
-def current_uin(env, name: str) -> int:
-    """该槽位当前登录账号的 uin；未登录/停在登录页/已登出返回 0。
+def _uin_in_name(fn: str) -> int:
+    """从含 uin 的文件名里取出 uin，取不到返回 0。"""
+    if fn.startswith("monitordata_"):
+        m = _MON.match(fn)
+        return int(m.group(1)) if m else 0
+    if fn.startswith("key_reportnow_"):
+        idx = 2
+    elif fn.startswith("key_") or fn.startswith("reportnow_"):
+        idx = 1
+    else:
+        idx = 0
+    parts = fn.split("_")
+    if len(parts) <= idx:
+        return 0
+    try:
+        return int(parts[idx])
+    except ValueError:
+        return 0
 
-    光有 monitordata 锁可能是已退出账号的残留文件，须同时有对应
-    key_<uin>_..._input.statistic 被占用才认作真正在线。
+
+def current_uin(env, name: str) -> int:
+    """该槽位当前被哪个账号占用（uin）；定不了返回 0。
+
+    单 uin 占用直接判定；多个 uin 同时占用时改用含 uin 的其它文件消歧。
     """
     if not slot_busy(env, name):
         return 0
@@ -289,14 +308,14 @@ def current_uin(env, name: str) -> int:
             locked.add(int(m.group(1)))
     if not locked:
         return 0
+    if len(locked) == 1:
+        return next(iter(locked))
     for fn in names:
-        if fn.startswith("key_") and fn.endswith("_input.statistic"):
-            try:
-                u = int(fn.split("_")[1])
-            except (ValueError, IndexError):
-                continue
-            if u in locked and not exclusive_open_ok(os.path.join(d, fn)):
-                return u
+        if fn.startswith("monitordata_"):
+            continue
+        u = _uin_in_name(fn)
+        if u and u in locked and not exclusive_open_ok(os.path.join(d, fn)):
+            return u
     return 0
 
 
