@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import datetime
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
@@ -21,6 +22,10 @@ LOG_PATH = os.path.join(ROOT, "logs", "wechat_launcher.log")
 CREATE_NO_WINDOW = 0x08000000
 
 
+# 日志仅保留最近若干天，过期行自动清理
+LOG_KEEP_DAYS = 3
+
+
 def log_line(text: str) -> None:
     """统一日志落盘：logs\wechat_launcher.log。"""
     try:
@@ -32,6 +37,43 @@ def log_line(text: str) -> None:
                        int(n * 1000) % 1000, text))
     except Exception:                           # noqa: BLE001
         pass
+
+
+def _log_date(line: str):
+    """从日志行首 [YYYY-MM-DD ...] 解析日期，失败返回 None。"""
+    if len(line) < 12 or line[0] != "[":
+        return None
+    try:
+        return datetime.datetime.strptime(line[1:11], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def purge_logs(max_days: int = LOG_KEEP_DAYS) -> None:
+    """删除日志文件中超过保留天数的旧行。"""
+    try:
+        if not os.path.isfile(LOG_PATH):
+            return
+        cutoff = datetime.date.today() - datetime.timedelta(days=max_days)
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        kept = [ln for ln in lines if (_log_date(ln) or datetime.date.today()) >= cutoff]
+        if len(kept) != len(lines):
+            with open(LOG_PATH, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+    except OSError:
+        pass
+
+
+def _start_log_purger(max_days: int = LOG_KEEP_DAYS) -> None:
+    """后台守护线程：每天清理一次过期日志。"""
+
+    def _loop() -> None:
+        while True:
+            time.sleep(86400)
+            purge_logs(max_days)
+
+    threading.Thread(target=_loop, daemon=True).start()
 
 
 def _silence_console_windows() -> None:
@@ -1455,6 +1497,8 @@ def main() -> None:
     # 单实例闸门放在最前
     if not _claim_single_instance():
         return
+    purge_logs()
+    _start_log_purger()
     _enable_dpi()
     App().mainloop()
 
