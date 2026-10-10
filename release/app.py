@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import messagebox
 
 # 运行根：RELEASE_DIR = release 目录；ROOT = 程序根（data 与 logs 的父目录）
 RELEASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1182,7 +1183,12 @@ class App(tk.Tk):
         if acc.wxid in self._status_online():
             log_line("删除跳过：%s 正在使用中，请先退出微信再删除。" % acc.title)
             return
-        log_line("删除账号档案（无二次确认）：%s" % acc.title)
+        if not messagebox.askyesno(
+                "删除账号",
+                "删除「%s」的登录档案？\n（只删本工具的存档，不影响微信聊天记录）"
+                % acc.title):
+            return
+        log_line("删除账号档案：%s" % acc.title)
         ok, errs = self.vault.delete(acc.wxid)
         for _k in [k for k in self._avatar_cache if k[0] == acc.wxid]:
             self._avatar_cache.pop(_k, None)
