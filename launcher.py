@@ -7,7 +7,6 @@ import sys
 import time
 import traceback
 
-from tkinter import messagebox
 
 # 打包后：根目录 = exe 所在目录；开发期：根目录 = 本文件所在目录。
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -87,14 +86,7 @@ def on_uncaught(exc_type, exc, tb) -> None:
     tail = ""
     if miss:
         tail = "\n\n外置代码区疑似不完整，缺少：\n  " + "\n  ".join(miss)
-    try:
-        messagebox.showerror(
-            "微信多账号免扫码登录器 — 启动失败",
-            "%s: %s\n\n程序目录：\n%s%s\n\n完整日志：\n%s\n\n"
-            "本程序不会自动替换或修复 release 目录，请按日志/上文恢复文件。"
-            % (exc_type.__name__, exc, ROOT, tail, LOG_PATH))
-    except Exception:                       # noqa: BLE001
-        pass
+    log("启动失败：已记录完整异常与缺失信息，请按日志恢复 release 目录。")
 
 
 def main() -> None:

@@ -9,7 +9,6 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox
 
 # 运行根：RELEASE_DIR = release 目录；ROOT = 程序根（data 与 logs 的父目录）
 RELEASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -103,11 +102,7 @@ def _on_uncaught(exc_type, exc, tb) -> None:
         _orig_excepthook(exc_type, exc, tb)
     except Exception:
         pass
-    try:
-        messagebox.showerror("微信多账号免扫码登录器 — 出错了",
-                             "%s: %s\n\n日志文件：\n%s" % (exc_type.__name__, exc, LOG_PATH))
-    except Exception:
-        pass
+    log_line("发生未捕获异常（完整堆栈见上方），日志文件：%s" % LOG_PATH)
 
 
 sys.excepthook = _on_uncaught
@@ -470,7 +465,7 @@ class App(tk.Tk):
         else:
             log_line("环境探测失败：没有拿到环境（env=None）")
             if err is not None:
-                messagebox.showerror("环境探测失败", str(err), parent=self)
+                log_line("环境探测失败：%s" % err)
         if not ok:
             _warn_no_uia(self)
         self._booting = False
@@ -1132,13 +1127,11 @@ class App(tk.Tk):
         if self._locked:
             return
         if acc.wxid in self._status_online():
-            messagebox.showinfo("已在线", "「%s」已经在线了。" % acc.title)
+            log_line("登录跳过：%s 已经在线了。" % acc.title)
             return
         if not self.vault.ready(acc.wxid):
-            messagebox.showwarning(
-                "登录态不完整",
-                "「%s」档案里缺少 config 对或 host，无法免扫码登录。\n\n"
-                "请先用微信登录一次该账号，后台监控会自动补齐。" % acc.title)
+            log_line("登录跳过：%s 档案里缺少 config 对或 host，无法免扫码登录"
+                     "（请先用微信登录一次该账号，后台监控会自动补齐）。" % acc.title)
             return
 
         def work():
@@ -1147,8 +1140,7 @@ class App(tk.Tk):
             if res.get("ok"):
                 self.after(0, lambda: self._set(note))
             else:
-                self.after(0, lambda: messagebox.showwarning(
-                    "登录未完成", note or "未知原因"))
+                self.after(0, lambda n=note: log_line("登录未完成：%s" % (n or "未知原因")))
         self._run(work, "正在登录「%s」..." % acc.title)
 
     def on_login_all(self) -> None:
@@ -1159,11 +1151,9 @@ class App(tk.Tk):
                 if a.wxid not in online and self.vault.ready(a.wxid)]
         if not todo:
             skipped = len(self.vault.list_accounts()) - len(todo)
-            messagebox.showinfo(
-                "无需登录",
-                ("没有可登录的账号。\n（已在线 %d 个，登录态不完整 %d 个）"
-                 % (len(online), skipped)) if skipped
-                else "所有账号都已经在线了。")
+            log_line("一键登录：没有可登录的账号（已在线 %d 个，登录态不完整 %d 个）。"
+                     % (len(online), skipped) if skipped
+                     else "一键登录：所有账号都已经在线了。")
             return
 
         def work():
@@ -1180,31 +1170,26 @@ class App(tk.Tk):
                 msg += "，失败 %d 个（%s）" % (len(failed), "、".join(failed))
             self.after(0, lambda: self._set(msg))
             if failed:
-                self.after(0, lambda: messagebox.showwarning(
-                    "部分账号未登录成功", "以下账号未能登录：\n%s\n\n"
-                    "多为其登录态已失效，请重新用微信登录一次以更新档案。"
-                    % "\n".join(failed)))
+                _failed = list(failed)
+                _msg = ("一键登录：以下账号未能登录（多为其登录态已失效，"
+                        "请重新用微信登录一次以更新档案）：\n%s" % "\n".join(_failed))
+                log_line(_msg)
         self._run(work, "正在一键登录 %d 个账号..." % len(todo))
 
     def on_delete(self, acc) -> None:
         if self._locked:
             return
         if acc.wxid in self._status_online():
-            messagebox.showinfo("账号在线", "「%s」正在使用中，请先退出微信再删除。"
-                                % acc.title)
+            log_line("删除跳过：%s 正在使用中，请先退出微信再删除。" % acc.title)
             return
-        if not messagebox.askyesno(
-                "删除账号",
-                "删除「%s」的登录档案？\n（只删本工具的存档，不影响微信聊天记录）"
-                % acc.title):
-            return
+        log_line("删除账号档案（无二次确认）：%s" % acc.title)
         ok, errs = self.vault.delete(acc.wxid)
         for _k in [k for k in self._avatar_cache if k[0] == acc.wxid]:
             self._avatar_cache.pop(_k, None)
         self._gray_failed.discard(acc.wxid)
         if not ok:
-            messagebox.showwarning("部分未删除", "%d 个文件删不掉。\n%s"
-                                   % (len(errs), self.vault.account_dir(acc.wxid)))
+            log_line("删除未完成：%d 个文件删不掉，目录 %s"
+                     % (len(errs), self.vault.account_dir(acc.wxid)))
         self.refresh()
 
     def on_close(self) -> None:
@@ -1438,10 +1423,7 @@ def _warn_no_uia(parent=None) -> None:
            % ("打包版 exe" if getattr(sys, "frozen", False)
               else "源码版 Python %s" % sys.version.split()[0], ext_dir))
     sys.stderr.write("！" + msg.replace("\n", "\n！") + "\n")
-    try:
-        messagebox.showwarning("缺少 UI 自动化组件", msg, parent=parent)
-    except Exception:                           # noqa: BLE001
-        pass
+    log_line("缺少 UI 自动化组件：" + msg.replace("\n", " "))
 
 
 def _preflight() -> bool:
