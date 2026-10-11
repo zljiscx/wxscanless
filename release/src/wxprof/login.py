@@ -148,25 +148,6 @@ def wait_entered(env, pid: int, acc, target_slot: str,
     return {"ok": False, "state": st, "why": why}
 
 
-def _park_after_launch(env, pid: int, target: str, log=print,
-                       timeout: float = 15.0) -> bool:
-    """等本实例读走暂用位 config 后，把它固化成该槽位的专属文件。"""
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        st = slot.park_if_holder(env, pid, target)
-        if st == "parked":
-            log("  已固化 config → global_config.%s" % target)
-            return True
-        if st in ("conflict", "fail"):
-            log("  ⚠ config 固化未成功（%s），该实例 config 归属暂不可控" % st)
-            return False
-        if not process.is_alive(pid):
-            return False
-        time.sleep(POLL)
-    log("  ⚠ 实例未在 %.0f 秒内读走 config，未固化" % timeout)
-    return False
-
-
 def login_account(env, vault, acc, log=print) -> dict:
     """免扫码登录一个已收录账号。返回 {ok, stage, detail, pid, slot, state}。"""
     res = {"ok": False, "stage": "", "detail": "", "pid": 0,
@@ -257,9 +238,6 @@ def login_account(env, vault, acc, log=print) -> dict:
         return res
     res["pid"] = pid
     log("  本次实例 pid=%s" % pid)
-
-    # 6b) 固化 config：等本实例读走暂用位后改名到本槽位
-    _park_after_launch(env, pid, target, log)
 
     # 7) 「进入微信」一出现就点
     if win is not None:
