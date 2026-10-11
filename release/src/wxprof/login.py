@@ -209,8 +209,8 @@ def login_account(env, vault, acc, log=print) -> dict:
     log("  已把 host 铺进槽位 %s（%d 个文件）" % (target, hn))
 
     # 6) 启动实例，等本实例的登录窗口（按 pid 认）
-    log("  XWeb 运行时搜索路径：%s"
-        % (paths.xweb_runtime_dir(env.appdata_dir) or "<未找到，按原样启动>"))
+    log("  已补 XWeb 运行库搜索路径" if paths.xweb_runtime_dir(env.appdata_dir)
+        else "  未找到 XWeb 运行库，按原样启动")
 
     def _launch_and_wait(timeout: float):
         """启动微信 → 等本实例的登录窗口（或它已直接进主界面）。返回 (pid, win)。"""
