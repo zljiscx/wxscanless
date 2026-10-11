@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
-from . import collect, slot, process
+from . import collect, diag, slot, process
 
 ST_MAIN = "main"                 # 主界面（正常显示）
 ST_MAIN_MIN = "main_min"         # 主界面（已最小化）
@@ -192,23 +192,27 @@ class Watcher:
         from . import ui
         try:
             win = ui.login_window_of(pid)
-        except Exception:                       # noqa: BLE001
+        except Exception as e:                  # noqa: BLE001
+            diag.warn("watch", "查登录窗口异常 pid=%s：%r" % (pid, e))
             return ST_UNKNOWN
         if win is not None:
             try:
                 state, _nick, _why = ui.login_state(win)
-            except Exception:                   # noqa: BLE001
+            except Exception as e:              # noqa: BLE001
+                diag.warn("watch", "读登录页状态异常 pid=%s：%r" % (pid, e))
                 return ST_UNKNOWN
             return "login_" + state
         try:
             mw = ui.main_window_of(pid)
-        except Exception:                       # noqa: BLE001
+        except Exception as e:                  # noqa: BLE001
+            diag.warn("watch", "查主窗口异常 pid=%s：%r" % (pid, e))
             return ST_UNKNOWN
         if mw is None:
             return ST_MAIN_CLOSED
         try:
             return ui.window_visual_state(mw)
-        except Exception:                       # noqa: BLE001
+        except Exception as e:                  # noqa: BLE001
+            diag.warn("watch", "读主窗口状态异常 pid=%s：%r" % (pid, e))
             return ST_MAIN
 
     def _online_from_bind(self) -> dict:
@@ -239,6 +243,9 @@ class Watcher:
             self._notify({"ok": True, "new": False,
                           "changed": res.get("changed"), "wxid": acc.wxid,
                           "title": acc.title, "slot": slot_name})
+        else:
+            diag.warn("watch", "采集未完成（%s，槽位 %s）：%s"
+                      % (acc.wxid, slot_name, res.get("detail") or "未知"))
 
     def _notify(self, res: dict) -> None:
         if not self.on_event:

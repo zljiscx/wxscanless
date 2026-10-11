@@ -10,6 +10,8 @@ import shutil
 import time
 from ctypes import wintypes
 
+from . import diag
+
 # 微信的实例槽位，按下标即"第几个实例"；数量不固定，运行时动态枚举
 _SLOT_RE = re.compile(r"^net(?:_(\d+))?$")
 
@@ -122,7 +124,8 @@ def file_owner_pids(path: str) -> list:
             return []
         arr = (_RM_PROCESS_INFO * filled.value).from_buffer_copy(buf)
         return [p.Process.dwProcessId for p in arr if p.Process.dwProcessId]
-    except Exception:
+    except Exception as e:                      # noqa: BLE001
+        diag.warn("slot", "反查文件占用进程失败：%r" % (e,))
         return []
     finally:
         try:
@@ -174,7 +177,8 @@ def park_config(env, name: str) -> bool:
     try:
         os.replace(src, dst)
         os.replace(src + ".crc", dst + ".crc")
-    except OSError:
+    except OSError as e:                        # noqa: BLE001
+        diag.warn("slot", "固化 config 失败（%s）：%r" % (dst, e))
         return False
     return True
 
@@ -508,7 +512,8 @@ def slot_logged_in(env, name: str) -> bool:
     if pid and pid in pids:
         try:
             return ui.login_window_of(pid) is None
-        except Exception:                       # noqa: BLE001
+        except Exception as e:                  # noqa: BLE001
+            diag.warn("slot", "查登录窗口异常 pid=%s：%r" % (pid, e))
             return False
     order = [n for n in instance_names(env) if slot_busy(env, n)]
     for i, nm in enumerate(order):

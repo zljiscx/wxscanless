@@ -132,8 +132,11 @@ for _p in (os.path.join(RELEASE_DIR, "ext"),      # 第三方依赖目录
         sys.path.insert(0, _p)
 
 from wxprof import login, paths, process, slot, ui, vault, watcher     # noqa: E402
+from wxprof import diag                                                 # noqa: E402
 from wxprof import __version__                                          # noqa: E402
 from wxprof import avatar as avatar_mod                                 # noqa: E402
+
+diag.set_path(LOG_PATH)
 
 _orig_excepthook = sys.excepthook
 

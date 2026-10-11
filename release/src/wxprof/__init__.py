@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-__version__ = "1.10.4"
+__version__ = "1.11.0"
 
 
 def file_md5(path: str) -> str:

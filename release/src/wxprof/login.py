@@ -6,7 +6,7 @@ import os
 import shutil
 import time
 
-from . import collect, mmkv, paths, process, slot, ui
+from . import collect, diag, mmkv, paths, process, slot, ui
 from .vault import CONFIG_FILES
 
 LIVE_BAK = ".livebak"          # 热替换时被改名让位的旧配置
@@ -224,11 +224,20 @@ def login_account(env, vault, acc, log=print) -> dict:
         while time.time() - t < timeout:
             try:
                 w = ui.login_window_of(p)
-            except Exception:                   # noqa: BLE001
+            except Exception as e:              # noqa: BLE001
+                diag.warn("login", "查登录窗口异常 pid=%s：%r" % (p, e))
                 w = None
             if w is not None or ui.main_window_of(p) is not None:
                 break
             time.sleep(POLL)
+        if w is None:
+            try:
+                has_main = ui.main_window_of(p) is not None
+            except Exception:                   # noqa: BLE001
+                has_main = False
+            if not has_main:
+                diag.warn("login", "启动后未取到登录窗口/主窗口（pid=%s，等了 %.0f 秒）"
+                          % (p, timeout))
         return p, w
 
     pid, win = _launch_and_wait(WINDOW_WAIT)

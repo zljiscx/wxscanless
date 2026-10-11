@@ -8,6 +8,8 @@ import subprocess
 import time
 from ctypes import wintypes
 
+from . import diag
+
 EXE_NAMES = ("Weixin.exe", "WeChat.exe")
 # 子进程携带 --type=<角色>，主进程没有
 SUB_TYPE_FLAG = "--type="
@@ -234,7 +236,8 @@ def kill(pid: int) -> bool:
         subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                        creationflags=CREATE_NO_WINDOW,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
+    except OSError as e:                        # noqa: BLE001
+        diag.warn("process", "强制结束进程失败 pid=%s：%r" % (pid, e))
         return False
     return not is_alive(pid)
 

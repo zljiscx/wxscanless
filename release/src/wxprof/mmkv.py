@@ -7,7 +7,7 @@ import os
 import struct
 import sys
 
-from . import file_md5
+from . import diag, file_md5
 
 CRYPT_KEY = b"xwechat_crypt_key"[:16]
 _HEAD = 4                                    # 主文件头长度
@@ -318,7 +318,8 @@ def probe(path: str) -> dict:
         return hit[1]
     try:
         s = summary(decode(path))
-    except Exception:                      # noqa: BLE001 解密失败不应打断监控
+    except Exception as e:                 # noqa: BLE001 解密失败不应打断监控
+        diag.warn("mmkv", "解密 global_config 失败：%r" % (e,))
         s = {}
     s["fp"] = fp
     _probe_cache[key] = (fp, s)

@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 
-from . import file_md5, mmkv
+from . import diag, file_md5, mmkv
 
 CONFIG_FILES = ("global_config", "global_config.crc")
 
@@ -36,7 +36,8 @@ def _write_bytes(dst: str, data: bytes) -> bool:
         with open(dst, "wb") as f:
             f.write(data)
         return True
-    except OSError:
+    except OSError as e:                        # noqa: BLE001
+        diag.warn("vault", "写入档案失败 %s：%r" % (dst, e))
         return False
 
 
