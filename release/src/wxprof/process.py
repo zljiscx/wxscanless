@@ -226,6 +226,19 @@ def is_alive(pid: int) -> bool:
     return True
 
 
+def kill(pid: int) -> bool:
+    """强制结束该进程（仅用于无法确定归属的实例）。"""
+    if not pid:
+        return False
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                       creationflags=CREATE_NO_WINDOW,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return not is_alive(pid)
+
+
 def _ensure_xweb_dll_path() -> str:
     """把 XWeb 运行时目录补进 PATH，供微信进程树解析 xweb_elf.dll。"""
     from . import paths

@@ -10,7 +10,33 @@ from .vault import Account, Vault
 
 
 def live_config_path(env) -> str:
-    return os.path.join(env.config_dir, "global_config") if env.config_dir else ""
+    return slot.live_config_path(env)
+
+
+def collect_slot(env, vault: Vault, acc: Account, slot_name: str) -> dict:
+    """按槽位采该账号的完整登录态：config 对 + host。返回结果摘要。"""
+    res = {"ok": False, "changed": [], "detail": ""}
+    cfg = slot.slot_config_path(env, slot_name)
+    if not cfg or not os.path.isfile(cfg):
+        res["detail"] = "该槽位暂无固化 config"
+        return res
+    ok, err = vault.save_config_files(
+        acc.wxid, {slot.CFG_FILE: cfg, slot.CFG_CRC: cfg + ".crc"},
+        expect_wxid=acc.wxid)
+    if ok:
+        acc.config_fp = vault.cfg_fingerprint(acc.wxid)
+        res["changed"].append("config")
+    else:
+        res["detail"] = err
+    if vault.save_host(acc.wxid, slot.host_dir(env, slot_name)):
+        acc.host_fp = slot.fp_digest(slot.host_fingerprint(env, slot_name))
+        acc.slot = slot_name
+        res["changed"].append("host")
+    if res["changed"]:
+        res["ok"] = True
+        acc.last_capture = _now()
+        vault.save_meta(acc)
+    return res
 
 
 def live_summary(env) -> dict:

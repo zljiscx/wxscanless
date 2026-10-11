@@ -39,12 +39,9 @@ class Watcher:
         self._th = None
         self._paused = False
         self._lock = threading.Lock()
-        self._last_cfg = {}                 # wxid -> 上次采集 config 时刻
-        self._last_host = {}                # wxid -> 上次采集 host 时刻
-        self.cfg_gap = 6.0
-        self.host_gap = 6.0
         self._last_seen = None              # 上一轮的在线摘要，用于变化通知
         self._bind = {}                     # pid -> {slot, uin, state, ts}
+        self._parked = set()                # 已固化 config 的 pid
         self.status = self._blank()
 
     @staticmethod
@@ -98,8 +95,6 @@ class Watcher:
             "states": {p: b.get("state", "") for p, b in self._bind.items()},
         }
         self.status = st
-        if online and not self._pausing():
-            self._collect(online, live)
         # 在线条目或实例数变了 ⇒ 立刻通知界面，不必等它自己的轮询
         seen = (tuple(sorted(online.items())), st["instances"])
         if seen != self._last_seen:
@@ -118,6 +113,7 @@ class Watcher:
             if pid in pids:
                 continue
             b = self._bind.pop(pid)
+            self._parked.discard(pid)
             self.on_log("实例 PID=%s 已退出 → uin=%s 离线（槽位 %s）"
                         % (pid, b.get("uin") or "?", b.get("slot") or "?"))
 
@@ -130,6 +126,7 @@ class Watcher:
                 owner[name] = op
 
         for pid in pids:
+            self._park(pid, owner, env)
             if pid in self._bind:
                 continue
             name = ""
@@ -148,6 +145,28 @@ class Watcher:
         for pid in list(self._bind):
             self._refresh_state(pid)
 
+    def _park(self, pid, owner, env) -> None:
+        """新实例读走暂用位 config 后固化到其槽位；多实例共用则结束不可控者。"""
+        if pid in self._parked:
+            return
+        name = ""
+        for n, o in owner.items():
+            if o == pid:
+                name = n
+                break
+        if not name:
+            return
+        st = slot.park_if_holder(env, pid, name)
+        if st == "parked":
+            self._parked.add(pid)
+            self.on_log("已固化 config → global_config.%s（实例 PID=%s）"
+                        % (name, pid))
+        elif st == "conflict":
+            self._parked.add(pid)
+            for p in slot.config_holder_pids(env):
+                self.on_log("实例 PID=%s 与其他实例共用 config，归属不可控 → 强制结束" % p)
+                process.kill(p)
+
     def _refresh_state(self, pid) -> None:
         """按频率刷新实例界面状态；主界面后降频。主界面退回登录页即解绑重来。"""
         b = self._bind.get(pid)
@@ -162,6 +181,7 @@ class Watcher:
         b["ts"] = now
         if prev == ST_MAIN and st.startswith("login_"):
             self._bind.pop(pid, None)
+            self._parked.discard(pid)
             self.on_log("实例 PID=%s 由主界面退回登录页（%s）→ 重新绑定账号"
                         % (pid, STATE_CN.get(st, st)))
             return
@@ -204,59 +224,21 @@ class Watcher:
         return out
 
     def _on_bound(self, pid, slot_name: str, uin: int) -> None:
-        """实例刚绑定成功（登录成功）→ 立刻为该账号采集一次 host。"""
+        """实例绑定成功（登录成功）→ 按槽位采集该账号完整登录态一次。"""
         acc = self.vault.by_uin(uin)
         if acc is None:
             return
         try:
-            if collect.refresh_host(self.env, self.vault, acc, slot_name):
-                self.on_log("已更新「%s」的 host（槽位 %s）"
-                            % (acc.title, slot_name))
-                self._notify({"ok": True, "new": False, "changed": ["host"],
-                              "wxid": acc.wxid, "title": acc.title,
-                              "slot": slot_name})
+            res = collect.collect_slot(self.env, self.vault, acc, slot_name)
         except Exception as e:                  # noqa: BLE001
-            self.on_log("更新 host 失败：%s" % e)
-
-    def _collect(self, online: dict, live: dict) -> None:
-        now = time.time()
-        # ★ 不能只看 live 的 wxid：微信退出时会把 live config 清空（wxid=''），
-        #   而登录期间也可能短暂为空 ⇒ 门槛形同虚设，采集永远不触发。
-        #   改用 resolve_live_account：live 无 wxid 时回退"槽位 uin 锚点 → 档案"。
-        live_wxid, _uin, _src = collect.resolve_live_account(
-            self.env, self.vault, live)
-
-        # 1) live 归属账号：完整采集（config 对 + host + 头像）
-        if live_wxid and now - self._last_cfg.get(live_wxid, 0.0) >= self.cfg_gap:
-            self._last_cfg[live_wxid] = now
-            try:
-                res = collect.collect_live(self.env, self.vault, log=self.on_log)
-            except Exception as e:              # noqa: BLE001
-                self.on_log("采集失败：%s" % e)
-                return
-            if res.get("ok") and (res.get("new") or res.get("changed")):
-                self._notify(res)
-
-        # 2) 其它在线账号：只刷新 host（避免用 live config 串档）
-        if not online:
+            self.on_log("采集失败：%s" % e)
             return
-        by_id = {a.wxid: a for a in self.vault.list_accounts()}
-        for wxid, slot_name in online.items():
-            acc = by_id.get(wxid)
-            if acc is None or acc.wxid == live_wxid:
-                continue
-            if now - self._last_host.get(acc.wxid, 0.0) < self.host_gap:
-                continue
-            self._last_host[acc.wxid] = now
-            try:
-                if collect.refresh_host(self.env, self.vault, acc, slot_name):
-                    self.on_log("已更新「%s」的 host（槽位 %s）"
-                                % (acc.title, slot_name))
-                    self._notify({"ok": True, "new": False, "changed": ["host"],
-                                  "wxid": acc.wxid, "title": acc.title,
-                                  "slot": slot_name})
-            except Exception as e:              # noqa: BLE001
-                self.on_log("更新 host 失败：%s" % e)
+        if res.get("ok"):
+            self.on_log("已采集「%s」登录态（%s）"
+                        % (acc.title, "、".join(res.get("changed") or [])))
+            self._notify({"ok": True, "new": False,
+                          "changed": res.get("changed"), "wxid": acc.wxid,
+                          "title": acc.title, "slot": slot_name})
 
     def _notify(self, res: dict) -> None:
         if not self.on_event:

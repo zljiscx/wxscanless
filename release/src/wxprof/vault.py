@@ -184,6 +184,29 @@ class Vault:
         from . import slot
         return slot.fp_digest(self.host_fingerprint(wxid))
 
+    def save_config_files(self, wxid: str, pairs: dict,
+                          expect_wxid: str = "") -> tuple:
+        """把一组 {档案文件名: 源路径} 的 config 存进档案。返回 (是否保存, 错误)。"""
+        blob = {fn: _stable_read(p) for fn, p in pairs.items()}
+        if not all(blob.values()):
+            return False, "读取配置失败"
+        tmp_dir = os.path.join(self.account_dir(wxid), "_tmpcfg")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        ok = True
+        for fn, data in blob.items():
+            ok = _write_bytes(os.path.join(tmp_dir, fn), data) and ok
+        owner = mmkv.owner_of(os.path.join(tmp_dir, "global_config")) if ok else ""
+        want = expect_wxid or wxid
+        if not ok or owner != want:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return False, "归属校验失败（解出 %s，期望 %s）" % (owner or "空", want)
+        dst = self.cfg_dir(wxid)
+        os.makedirs(dst, exist_ok=True)
+        for fn, data in blob.items():
+            _write_bytes(os.path.join(dst, fn), data)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return True, ""
+
     def save_config(self, wxid: str, src_dir: str, expect_wxid: str = "") -> tuple:
         """把活配置对存进档案。返回 (是否保存, 错误)。"""
         if not src_dir:

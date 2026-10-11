@@ -139,6 +139,59 @@ def slot_dir(env, name: str) -> str:
     return os.path.join(slot_root(env), name)
 
 
+CFG_FILE = "global_config"
+CFG_CRC = "global_config.crc"
+
+
+def live_config_path(env) -> str:
+    """微信默认读取的全局 config（各实例启动时的暂用位）。"""
+    return os.path.join(env.config_dir, CFG_FILE) if env.config_dir else ""
+
+
+def slot_config_path(env, name: str) -> str:
+    """该槽位固化的 config 文件（暂用位读走后改名到此）。"""
+    if not env.config_dir:
+        return ""
+    return os.path.join(env.config_dir, "%s.%s" % (CFG_FILE, name))
+
+
+def config_holder_pids(env) -> list:
+    """当前持有暂用位 config 的进程 PID；暂用位不存在返回空。"""
+    src = live_config_path(env)
+    if not src or not os.path.isfile(src):
+        return []
+    return file_owner_pids(src)
+
+
+def park_config(env, name: str) -> bool:
+    """把暂用位的 config 对固化成该槽位的专属文件。"""
+    src = live_config_path(env)
+    if not src or not os.path.isfile(src):
+        return False
+    dst = slot_config_path(env, name)
+    if not dst:
+        return False
+    try:
+        os.replace(src, dst)
+        os.replace(src + ".crc", dst + ".crc")
+    except OSError:
+        return False
+    return True
+
+
+def park_if_holder(env, pid: int, name: str) -> str:
+    """该实例若已读走暂用位 config 就固化成其槽位文件。
+
+    返回 wait（尚未读走）/ parked（已固化）/ conflict（多实例共用）/ fail。
+    """
+    holders = config_holder_pids(env)
+    if pid not in holders:
+        return "wait"
+    if len(holders) > 1:
+        return "conflict"
+    return "parked" if park_config(env, name) else "fail"
+
+
 def lock_file(env, name: str) -> str:
     """占用标记文件：微信对它持有 share=0 独占句柄。"""
     return os.path.join(slot_dir(env, name), "config.ini")
