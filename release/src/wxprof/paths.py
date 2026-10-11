@@ -241,35 +241,6 @@ def detect() -> WeChatEnv:
     return env
 
 
-_XWEB_PLUGIN_ROOT = ("xplugin", "plugins", "RadiumWMPF")
-_XWEB_DLL = "xweb_elf.dll"
-
-
-def xweb_runtime_dir(appdata_dir: str = "") -> str:
-    """微信 XWeb 宿主的运行时目录（含 xweb_elf.dll 的那一个）；找不到返回空串。"""
-    root = appdata_dir or _find_appdata_dir()
-    if not root:
-        return ""
-    host = os.path.join(root, *_XWEB_PLUGIN_ROOT)
-    if not os.path.isdir(host):
-        return ""
-    try:
-        names = os.listdir(host)
-    except OSError:
-        return ""
-    found = []
-    for name in names:
-        rt = os.path.join(host, name, "extracted", "runtime")
-        if os.path.isfile(os.path.join(rt, _XWEB_DLL)):
-            found.append((name, rt))
-    if not found:
-        return ""
-    numbered = [(int(n), rt) for n, rt in found if n.isdigit()]
-    if numbered:
-        return max(numbered, key=lambda it: it[0])[1]
-    return found[0][1]
-
-
 if __name__ == "__main__":
     e = detect()
     print(e.summary())

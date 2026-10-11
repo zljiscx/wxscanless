@@ -239,25 +239,11 @@ def kill(pid: int) -> bool:
     return not is_alive(pid)
 
 
-def _ensure_xweb_dll_path() -> str:
-    """把 XWeb 运行时目录补进 PATH，供微信进程树解析 xweb_elf.dll。"""
-    from . import paths
-
-    rt = paths.xweb_runtime_dir()
-    if not rt:
-        return ""
-    path = os.environ.get("PATH", "")
-    if rt not in path.split(os.pathsep):
-        os.environ["PATH"] = (path + os.pathsep + rt) if path else rt
-    return rt
-
-
 def launch(exe_path: str) -> list:
     """启动一个微信实例，返回新出现的主进程 pid 列表（等不到则为空列表）。"""
     if not os.path.isfile(exe_path):
         raise FileNotFoundError(exe_path)
     before = _main_pids()
-    _ensure_xweb_dll_path()
     try:
         os.startfile(exe_path)
     except OSError:
