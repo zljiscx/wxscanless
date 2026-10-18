@@ -147,24 +147,53 @@ def _find_appdata_dir() -> str:
     return ""
 
 
+_DOC_MARK = "mydocument:"     # config\<md5>.ini 里表示"默认位置（我的文档）"的标记
+
+
+def _documents_dir() -> str:
+    """系统"文档"目录；本机目录可能被重定向，不硬编码 ~\\Documents。"""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+        # CSIDL_PERSONAL = 0x0005，即"我的文档"
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 0x0005, None, 0, buf) >= 0:
+            if os.path.isdir(buf.value):
+                return buf.value
+    except Exception:                       # noqa: BLE001
+        pass
+    for key in (r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"):
+        v = os.path.expandvars(_reg_value(winreg.HKEY_CURRENT_USER, key, "Personal"))
+        if v and os.path.isdir(v):
+            return v
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
 def _read_data_root(appdata_dir: str) -> str:
-    """数据根目录写在 appdata_dir\\config\\<md5>.ini 里，文件内容就是路径本身。"""
+    """数据根目录写在 appdata_dir\\config\\<md5>.ini 里：自定义位置写路径本身，
+    默认位置写 MyDocument: 标记。"""
     cfg = os.path.join(appdata_dir, "config")
     try:
-        for name in sorted(os.listdir(cfg)):
-            if not name.lower().endswith(".ini"):
-                continue
+        names = [n for n in sorted(os.listdir(cfg)) if n.lower().endswith(".ini")]
+    except OSError:
+        return ""
+    for name in names:
+        try:
             with open(os.path.join(cfg, name), "rb") as f:
                 raw = f.read(512)
-            for enc in ("utf-8", "gbk"):
-                try:
-                    txt = raw.decode(enc).strip().strip("\x00").strip()
-                except UnicodeDecodeError:
-                    continue
-                if txt and os.path.isdir(txt):
-                    return txt
-    except OSError:
-        pass
+        except OSError:
+            continue
+        for enc in ("utf-8", "gbk"):
+            try:
+                txt = raw.decode(enc).strip().strip("\x00").strip()
+            except UnicodeDecodeError:
+                continue
+            if not txt:
+                continue
+            if txt.lower() == _DOC_MARK:
+                return _documents_dir()
+            if os.path.isdir(txt):
+                return txt
     return ""
 
 
@@ -221,8 +250,7 @@ def detect() -> WeChatEnv:
         env.data_root = _read_data_root(env.appdata_dir)
     if not env.data_root:
         env.errors.append("未能从 config\\*.ini 读出数据目录，将回退到默认文档目录")
-        docs = os.path.join(os.path.expanduser("~"), "Documents")
-        env.data_root = docs
+        env.data_root = _documents_dir()
 
     env.files_dir = _find_files_dir(env.data_root)
     if not env.files_dir:
